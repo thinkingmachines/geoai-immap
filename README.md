@@ -4,6 +4,14 @@ This repository accompanies our research work for Informal Settlement Detection 
 
 The goal of this project is to provide a means for faster, cheaper, and more scalable detection of rapidly growing informal settlements using low-resolution satellite images and machine learning.
 
+## Setup 
+To get started, create a virtual environment as follows:
+```sh
+python3 -m pip install --user virtualenv
+python3 -m venv venv
+ipython kernel install --user --name=venv
+```
+
 ## Code Organization
 This repository is divided into three main parts:
 
