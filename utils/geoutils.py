@@ -50,12 +50,14 @@ def generate_mask(tiff_file, shape_file, output_file, plot=False):
     
     values = {}
     if 'class' in gdf.columns:
-        values = {value:x+2 for x, value in enumerate(gdf['class'].unique())}
-        
+        unique_classes = sorted(gdf['class'].unique())
+        values = {value:x+2 for x, value in enumerate(unique_classes)}
+        values['informal settlement'] = 1
+    
+    value = 1.0
     shapes = []
     for index, (idx, x) in enumerate(gdf.iterrows()):
         band = 255/((idx/gdf.shape[0])+1)
-        value = 1.0
         if 'class' in x: value = values[x['class']]
         gdf_json = json.loads(gpd.GeoDataFrame(x).T.to_json())
         feature = [gdf_json['features'][0]['geometry']][0]
@@ -87,4 +89,4 @@ def generate_mask(tiff_file, shape_file, output_file, plot=False):
         ax[2].set_title('Masked')
         plt.show()
         
-    return image
+    return image, values
