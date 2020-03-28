@@ -217,3 +217,23 @@ def geospatialcv(data, features, label, clf, scale=False, verbose=0):
         print()
     
     return results, classifiers
+
+def resample(data, num_neg_samples=30000, random_state=42):
+    data_area = []
+    for area in data['area'].unique():
+        neg_sample = data[
+            (data['area'] == area) 
+            & (data['target'] != 1)
+        ].sample(
+            num_neg_samples, 
+            replace=False, 
+            random_state=random_state
+        )
+        data_area.append(neg_sample)
+
+    pos_samples = data[data['target'] == 1]
+    data_area.append(pos_samples)
+    data = pd.concat(data_area)
+    data = data.reset_index(drop=True)
+    
+    return data
