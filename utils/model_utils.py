@@ -16,7 +16,34 @@ from sklearn.feature_selection import (
     RFE
 )
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.calibration import CalibratedClassifierCV
+from sklearn.model_selection import GridSearchCV
+from sklearn.pipeline import Pipeline
+
+def hyperparameter_optimization(data, features, label, clf, param_grid, verbose=0, scoring='f1'):
+    cv_iterator = []
+    for area in data.area.unique():
+        train_indices = data[data.area != area].index.values.astype(int)
+        test_indices = data[data.area == area].index.values.astype(int)
+        cv_iterator.append( (train_indices, test_indices) )
+        
+    pipe_clf = Pipeline([
+        ('scaler',  MinMaxScaler()),
+        ('classifier', clf)
+    ])
+
+    random_cv = GridSearchCV(
+        estimator=pipe_clf, 
+        param_grid=param_grid,
+        cv=cv_iterator, 
+        verbose=verbose, 
+        scoring=scoring,
+        n_jobs=-1
+    )
+    random_cv.fit(data[features], data[label])
+    
+    print('Best Paramaters: {}'.format(random_cv.best_params_))
+    
+    return random_cv
 
 def get_best_features(
     clf, 
@@ -37,7 +64,6 @@ def get_best_features(
         label, 
         scale=scale, 
         range_=range_,
-        calibrate=calibrate,
         verbose=verbose
     )
     
@@ -57,8 +83,7 @@ def get_best_features(
     
     best_features = feat_dict[best_num_features]['rfe_features']
     
-    if verbose > 0:
-        print('Best {} Features: {}'.format(best_num_features, best_features))
+    print('Best {} Features: {}'.format(best_num_features, best_features))
     
     return best_features, feat_dict
 
@@ -67,8 +92,7 @@ def feature_selection(
     data, 
     features, 
     label, 
-    scale=False, 
-    calibrate=False, 
+    scale=False,  
     range_=[100, 0, -10],
     verbose=0
 ):
@@ -91,17 +115,9 @@ def feature_selection(
         # Recursive feature elimination
         rfe_features = get_rfe_features(X, y, clf, num_features, verbose)
         
-        # Calibration allows the model to output the class probability 
-        # We use this when the model does not have attribute .predict_proba()
-        # Source : https://machinelearningmastery.com/calibrated-classification-model-in-scikit-learn/
-        if calibrate:
-            clf_cv = CalibratedClassifierCV(clf)
-        else:
-            clf_cv = clf
-        
         # Commence leave-one-area-out cross validation
         results, _ = geospatialcv(
-            data, rfe_features, label, clf_cv, scale=scale, verbose=verbose
+            data, rfe_features, label, clf, scale=scale, verbose=verbose
         )
         
         # Record results in dictionary
