@@ -1,20 +1,23 @@
 // set output params
 var PRODUCT = 'COPERNICUS/S2'; // S2 for L1C <=2017 and S2_SR for L2A
-var FILENAME = 'gee_riohacha_2015_small';
-// var FILENAME = 'glcm_riohacha_2016';
+var FILENAME = 'gee_arauca_2016';
+// var FILENAME = 'glcm_riohacha_2016_p2';
 
 // set date window
-var date1 = ee.Date.fromYMD(2015,1,1); 
-var date2 = ee.Date.fromYMD(2015,12,31); 
+var date1 = ee.Date.fromYMD(2016,1,1); 
+var date2 = ee.Date.fromYMD(2016,12,31);
 
 // select region
-// var BBOX = [-73.171343876, 10.754102423, -72.158197931, 11.754143685]; //satellite image observed
-// var BBOX = [-72.292152, 11.686520, -72.244001, 11.734492]; // uribia urban area
-var BBOX = [-72.949333, 11.564208, -72.884616, 11.507526]; // riohacha urban area
+// x,y left, top, right, bottom
+// var BBOX = [-73.171343876, 11.754143685, -72.158197931, 10.754102423]; //satellite image observed
+// var BBOX = [-72.292152, 11.734492, -72.244001, 11.686520]; // uribia urban area
+// var BBOX = [-72.949333, 11.564208, -72.884616, 11.507526]; // riohacha urban area
 // var BBOX = [-72.272737, 11.403564, -72.212240, 11.361955]; // maicao urban area
-// var BBOX = [-72.52724612099996, 11.560920839000062, -73.17020892181104, 10.948171764015513]; // riohacha admin boundary
+// var BBOX = [-73.17020892181104, 11.560920839000062, -72.52724612099996, 10.948171764015513]; // riohacha admin boundary
 // var BBOX = [-72.65839212899994, 11.534938376940019, -72.15850845943176, 11.080548632000045]; // maicao admin boundary
 // var BBOX = [-72.37971307699996, 11.747684544661437, -72.15636466747618, 11.523307245000069]; // uribia admin boundary
+// var BBOX = [-72.903, 11.810, -72.252, 11.396]; // manaure admin boundary
+var BBOX = [-71.20643772199998,6.424234499000022,-69.72014485099999,7.104161825000062]; // arauca admin boundary
 // var BBOX = [-72.235049, 11.615007, -72.189534, 11.572060]; // green
 // var BBOX = [-72.199376, 11.515926, -72.154220, 11.473979]; // desert
 
@@ -142,17 +145,10 @@ Map.addLayer(composite.clip(region), {bands: ['B4', 'B3', 'B2'], min: 0, max: 0.
 // Map.addLayer(glcm, {bands: ['B8_asm']},
 //             'Texture ASM');
             
-// Export.image.toDrive({
-//   image: composite.select(['B1','B2','B3','B4','B5','B6','B7','B8','B8A','B9','B11','B12']),
-//   // image: glcm,
-//   description: FILENAME,
-//   maxPixels: 150000000,
-//   scale: 10,
-//   region: region
-// });
-
+// // Export.image.toDrive({
 // Export.image.toCloudStorage({
 //   image: composite.select(['B1','B2','B3','B4','B5','B6','B7','B8','B8A','B9','B11','B12']),
+//   // image: cons,
 //   // image: glcm,
 //   description: FILENAME,
 //   bucket: 'immap-gee',
