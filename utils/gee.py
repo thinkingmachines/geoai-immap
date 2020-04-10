@@ -1,10 +1,20 @@
+# gee dl
 import math
-
 import ee
 ee.Authenticate()
 ee.Initialize()
 
-#+++++++++++ FUNCTIONS ++++++++++++++++++++++++++
+# deflate crop
+import subprocess
+from tqdm import tqdm
+import logging
+import os
+from pathlib import Path
+
+# -----
+# gee dl
+# -----
+
 def imports2(img) :
     s2 = img.select(['B1','B2','B3','B4','B5','B6','B7','B8','B8A','B9','B11','B12'])\
              .divide(10000).addBands(img.select('QA60'))\
@@ -236,3 +246,100 @@ def sen2median(BBOX, year, FILENAME):
     task.start()
     print('Task started')
     # task.status()
+
+    
+# -----
+# deflatecrop
+# ----- 
+
+text = '''
+
+# set conda env for these commands - took me 3h to figure out
+eval "$(conda shell.bash hook)"
+conda activate ee
+
+gsutil cp gs://immap-gee/gee_area_year.tif output_dir
+
+gdal_translate -co COMPRESS=DEFLATE -co TILED=YES output_dirgee_area_year.tif output_dirDEFLATED_gee_area_year.tif
+
+gdalwarp -co "COMPRESS=DEFLATE" -cutline adm_dirarea.shp -srcnodata -dstnodata output_dirDEFLATED_gee_area_year.tif output_dirCROPPED_output.tif
+
+gsutil cp output_dirCROPPED_output.tif gs://immap-gee/CROPPED_output.tif
+
+rm output_dirgee_area_year.tif
+rm output_dirDEFLATED_gee_area_year.tif
+# rm output_dirCROPPED_gee_area_year.tif
+
+'''
+
+def deflatecrop1(repl, output_dir, adm_dir, tmp_dir, output = None):
+    '''
+    Same as deflatecrop_all but focused on one image at a time
+    
+    Args
+        output (str): what filename should look like, modified based on if repl is a list
+    '''
+    
+    logging.info('Running for {}'.format(repl))
+    area = repl.split('_')[1]
+    if output is None:
+        output = repl + '.tif'
+
+    replacement_txt = (text
+            .replace('gee_area_year', repl)
+            .replace('output.tif', output)
+            .replace('area.shp', area + '.shp')
+            .replace('output_dir', str(Path(output_dir).resolve()) + '/')
+            .replace('adm_dir', str(Path(adm_dir).resolve()) + '/')
+           )
+
+    f = open(tmp_dir + "deflatecrop.sh", "w")
+    f.write(replacement_txt)
+    f.close()
+    logging.info('Saving the following shell script in ' + tmp_dir + "deflatecrop.sh")
+    logging.info(replacement_txt)
+
+    
+    logging.info('Running shell script')
+    result = subprocess.run('sh ' + tmp_dir + 'deflatecrop.sh', shell = True, stdout=subprocess.PIPE)
+    logging.info(result.stdout)
+    logging.info('Saved to CROPPED_{}'.format(output))
+    logging.info('Done!')
+        
+def deflatecrop_all(repl, output_dir, adm_dir, tmp_dir):
+    '''
+    Allows support for multi-part images
+    
+    Args
+        repl (str): in the format gee_area_year
+        output_dir (str): where to put cropped files in the format /path/to/folder/
+        adm_dir (str): where the admin boundary shape files are in the format /path/to/folder/
+    '''
+
+    if os.path.exists(tmp_dir + "deflatecrop.sh"):
+        os.remove(tmp_dir + 'deflatecrop.sh')
+#     if os.path.exists(tmp_dir + "deflatecrop.log"):
+#         os.remove(tmp_dir + 'deflatecrop.log')
+        
+    logging.basicConfig(filename = tmp_dir + 'deflatecrop.log', filemode='w',level=logging.DEBUG)
+    
+    if type(repl) == list:
+        logging.info('looping')
+        i = 1
+        for p in repl:
+            output = p.split('0000')[0] + '_p{}.tif'.format(i)
+            deflatecrop1(
+                repl = p, 
+                output_dir = output_dir, 
+                adm_dir = adm_dir, 
+                tmp_dir = tmp_dir, 
+                output = output,
+            )
+            i+= 1
+    else:
+        deflatecrop1(
+            repl = repl, 
+            output_dir = output_dir, 
+            adm_dir = adm_dir,
+            tmp_dir = tmp_dir,
+        )
