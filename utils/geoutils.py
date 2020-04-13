@@ -15,6 +15,9 @@ from rasterio.windows import (
 )
 from rasterio import features
 import rasterio.mask
+from rasterio.plot import show
+
+la_guajira = ['maicao', 'riohacha', 'uribia']
 
 def write_indices(area_dict, area):
     """
@@ -138,11 +141,12 @@ def get_preds_windowing(area, area_dict, model, tmp_dir, best_features, scaler, 
         df_inds = read_inds_window(area_dict, area, window=window)
         df_test = pd.concat((df_bands, df_inds), axis = 1)
         df_test = rename_indcols(df_test)
+        df_test = df_test.replace([np.inf, -np.inf], 0)
 
         # pred =====
 
         X_test = df_test[best_features].fillna(0)
-        all_zeroes = (X_test.sum(axis=1) == 0 )
+        all_zeroes = (X_test.iloc[:, :-1].sum(axis=1) == 0 )
         if scaler != None:
             X_test = scaler.transform(X_test)
             
@@ -153,6 +157,7 @@ def get_preds_windowing(area, area_dict, model, tmp_dir, best_features, scaler, 
         preds = model._predict_proba_lr(data)[:, 1]
         if threshold > 0:
             preds[(preds < threshold)] = 0
+            
         preds[all_zeroes] = -1
 
         # Save =====
@@ -282,6 +287,10 @@ def read_bands_window(area_dict, area, window):
         del subdata
     
     data = pd.concat(data, axis=1)
+    if area in la_guajira:
+        data['la_guajira'] = 1
+    else:
+        data['la_guajira'] = 0
     
     return data
 
@@ -309,7 +318,7 @@ def ndvi(b):
     return (b["B8"] - b["B4"]) / (b["B8"] + b["B4"])
 
 def ndbi(b):
-    return (b["B11"] - b["B9"]) / (b["B11"] + b["B9"])
+    return (b["B11"] - b["B8"]) / (b["B11"] + b["B8"])
 
 def savi(b):
     return 1.5 * (b["B9"] - b["B4"]) / (b["B9"] + b["B4"] + 0.5)
@@ -435,10 +444,15 @@ def read_bands(area_dict, area):
             column + '_' + str(year) 
             for column in subdata.columns
         ]
+        
         data.append(subdata)
         del subdata
     
     data = pd.concat(data, axis=1)
+    if area in la_guajira:
+        data['la_guajira'] = 1
+    else:
+        data['la_guajira'] = 0
     
     return data
 
@@ -471,9 +485,15 @@ def generate_training_data(area_dict):
         # Read negative mask
         neg_mask = rio.open(area_dict[area]['neg_mask_tiff'])
         neg_mask = neg_mask.read(1).ravel()
+        
+        false_pos = 0
+        false_pos_tiff = area_dict[area]['false_pos_tiff']
+        if false_pos_tiff is not None:
+            false_pos = rio.open(false_pos_tiff)
+            false_pos = false_pos.read(1).ravel()
  
         # Get sum of postive and negative mask
-        mask = pos_mask + neg_mask
+        mask = pos_mask + neg_mask + false_pos
 
         # Read bands
         subdata = read_bands(area_dict, area)
@@ -491,7 +511,7 @@ def generate_training_data(area_dict):
     return data, area_code
 
 
-def get_filepaths(areas, sentinel_dir, pos_mask_dir, neg_mask_dir):
+def get_filepaths(areas, sentinel_dir, pos_mask_dir, neg_mask_dir, false_pos_dir):
     """
     Returns a dictionary containing the image filepaths for each area.
     
@@ -509,6 +529,7 @@ def get_filepaths(areas, sentinel_dir, pos_mask_dir, neg_mask_dir):
         
         area_dict[area]["pos_mask_gpkg"] = "{}{}_mask.gpkg".format(pos_mask_dir, area)
         area_dict[area]["neg_mask_gpkg"] = "{}{}-samples.gpkg".format(neg_mask_dir, area)
+        area_dict[area]["false_pos_gpkg"] = "{}{}-false-positive.gpkg".format(false_pos_dir, area)
         
         image_files, image_cropped, indices_cropped = [], [], []
         for image_file in os.listdir(sentinel_dir):
@@ -551,7 +572,7 @@ def explode(gdf):
     return gdf_out
 
 
-def generate_mask(tiff_file, shape_file, output_file, plot=False):
+def generate_mask(tiff_file, shape_file, output_file, false_pos=False, plot=False):
     """
     Generates a segmentation mask for one TIFF image.
     
@@ -568,14 +589,18 @@ def generate_mask(tiff_file, shape_file, output_file, plot=False):
     gdf = gpd.read_file(shape_file)
 
     values = {}
+        
     if "class" in gdf.columns:
         unique_classes = sorted(gdf["class"].unique())
         values = {value: x + 2 for x, value in enumerate(unique_classes)}
         values["informal settlement"] = 1
     
     value = 1.0
+    if false_pos:
+        value = 4.0
+        values["false positive"] = 4
+        
     shapes = []
-    
     for index, (idx, x) in enumerate(gdf.iterrows()):
         band = 255 / ((idx / gdf.shape[0]) + 1)
         if "class" in x:
@@ -610,8 +635,43 @@ def generate_mask(tiff_file, shape_file, output_file, plot=False):
         
     return image, values
 
+def get_false_pos_raster_mask(area_dict, plot=False):
+    """
+    Converts positive vector label files (GPKG) to raster masks (TIFF)
+    
+    Args:
+        area_dict (dict) : Python dictionary containing the file paths per area
+        
+    Returns:
+        area_dict (dict) : The input area_dict with a new entry "pos_mask_tiff"
+                           containing the file path of the generated TIFF file.
+    """
 
-def get_pos_raster_mask(area_dict):
+    for area, value in area_dict.items():
+        # Get filepaths
+        tiff_file = value["images_cropped"][0]
+        shape_file = value["false_pos_gpkg"]
+        target_file = shape_file.replace("gpkg", "tiff")
+        
+        if os.path.isfile(shape_file):
+            # Generate masks
+            generate_mask(
+                tiff_file=tiff_file,
+                shape_file=shape_file,
+                output_file=target_file,
+                false_pos=True,
+                plot=plot,
+            )
+
+            # Set filepath of raster mask in the area dictionary
+            area_dict[area]["false_pos_tiff"] = target_file
+        else:
+            area_dict[area]["false_pos_tiff"] = None
+
+    return area_dict
+
+
+def get_pos_raster_mask(area_dict, plot=False):
     """
     Converts positive vector label files (GPKG) to raster masks (TIFF)
     
@@ -634,7 +694,7 @@ def get_pos_raster_mask(area_dict):
             tiff_file=tiff_file,
             shape_file=shape_file,
             output_file=target_file,
-            plot=False,
+            plot=plot,
         )
 
         # Set filepath of raster mask in the area dictionary
@@ -643,7 +703,7 @@ def get_pos_raster_mask(area_dict):
     return area_dict
 
 
-def get_neg_raster_mask(area_dict):
+def get_neg_raster_mask(area_dict, plot=False):
     """
     Converts negative vector label files (GPKG) to raster masks (TIFF)
     
@@ -656,7 +716,7 @@ def get_neg_raster_mask(area_dict):
     """
 
     for area, value in area_dict.items():
-
+    
         # Get filepaths
         tiff_file = value["images_cropped"][0]
         shape_file = value["neg_mask_gpkg"]
@@ -666,7 +726,7 @@ def get_neg_raster_mask(area_dict):
 
             # Read vector file + geopandas cleanup
             gdf = gpd.read_file(shape_file)
-            gdf["class"] = gdf["class"].str.lower()
+            gdf["class"] = gdf["class"].str.lower().str.strip()
             gdf = gdf[
                 (gdf["class"] == "unoccupied land")
                 | (gdf["class"] == "formal settlement")
@@ -679,8 +739,9 @@ def get_neg_raster_mask(area_dict):
                 tiff_file=tiff_file,
                 shape_file=shape_file,
                 output_file=target_file,
-                plot=False,
+                plot=plot,
             )
+            
         # Set filepath of raster mask in the area dictionary
         area_dict[area]["neg_mask_tiff"] = target_file
         
