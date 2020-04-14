@@ -20,17 +20,18 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
 
-area_code = {0: 'maicao', 1:'riohacha', 2:'uribia', 3:'arauca1', 4:'cucuta'}
-
-def get_la_guajira(x):
-    if (
-        area_code[x] == 'maicao' 
-        or area_code[x] == 'riohacha' 
-        or area_code[x] == 'uribia'
-    ):
-        return 1
-    
-    return 0
+AREA_CODES = {
+    0 : 'Maicao', 
+    1 : 'Riohacha', 
+    2 : 'Uribia', 
+    3 : 'Arauca1', 
+    4 : 'Cucuta'
+}
+VALUE_CODES = {
+    'Informal settlement': 1, 
+    'Formal settlement': 2, 
+    'Unoccupied land': 3
+}
 
 def get_cv_iterator(data):
     cv_iterator = []
@@ -112,7 +113,7 @@ def geospatialcv(data, features, label, clf, scale=False, verbose=0):
     
     for area in data.area.unique():
         
-        area_str = area_code[area].upper()
+        area_str = AREA_CODES[area].upper()
         if verbose > 1:
             print('\nTest set: {}'.format(area_str))
         
@@ -168,41 +169,31 @@ def geospatialcv(data, features, label, clf, scale=False, verbose=0):
     
     return results, classifiers
 
-def resample(data, false_pos_samples, num_neg_samples, random_state):
-    
+def resample(data, num_neg_samples, neg_dist, random_state):    
     data_area = []
-    for area in data['area'].unique():            
-        if false_pos_samples > 0:
-            false_pos = data[
-                (data['area'] == area) 
-                & (data['target'] == 4)
+    
+    for area in data['area'].unique():
+        neg_samples = data[
+            (data['area'] == area) 
+            & (data['target'] != 1)
+        ]
+        for value in neg_dist:
+            samples = neg_samples[
+                data['target'] == VALUE_CODES[value]
             ]
             
-            if len(false_pos) < false_pos_samples:
-                false_pos_samples = len(false_pos)
-
-            false_pos = false_pos.sample(
-                false_pos_samples, 
+            n_samples = int(
+                num_neg_samples*neg_dist[value]
+            )
+            if len(samples) < n_samples:
+                n_samples = len(samples)
+                
+            samples = samples.sample(
+                n_samples, 
                 replace=False, 
                 random_state=random_state
             )
-            data_area.append(false_pos)
-            
-        neg_sample = data[
-            (data['area'] == area) 
-            & (data['target'] != 1)
-            & (data['target'] != 4)
-        ]
-        
-        if len(neg_sample) < num_neg_samples:
-            num_neg_samples = len(neg_sample)
-            
-        neg_sample = neg_sample.sample(
-            num_neg_samples - false_pos_samples, 
-            replace=False, 
-            random_state=random_state
-        )
-        data_area.append(neg_sample)
+            data_area.append(samples)
 
     pos_samples = data[data['target'] == 1]
     data_area.append(pos_samples)
