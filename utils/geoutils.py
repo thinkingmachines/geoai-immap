@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from pathlib import Path
+import subprocess
 import matplotlib.pyplot as plt
 
 import geopandas as gpd
@@ -181,8 +182,24 @@ def stitch(output, tmp_dir):
     file_list = [str(f) for f in list(p.glob('tmp*.tif'))]
     files_string = " ".join(file_list)
     command = "gdal_merge.py -n -1 -a_nodata -1 -o {} -of gtiff ".format(output) + files_string
-    print("Stitching all rasters into one")
-    os.system(command)
+
+    text = '''
+
+    # set conda env for these commands - took me 3h to figure out
+    eval "$(conda shell.bash hook)"
+    conda activate ee
+
+    {}
+
+    '''.format(command)
+
+    f = open(tmp_dir + "stitch.sh", "w")
+    f.write(text)
+    f.close()
+
+    result = subprocess.run('sh ' + tmp_dir + 'stitch.sh', shell = True, stdout=subprocess.PIPE)
+
+    return result
 
 def rename_indcols(df):
     """Renames columns according to column names used by model"""
