@@ -519,11 +519,12 @@ def get_filepaths(areas, sentinel_dir, pos_mask_dir, neg_mask_dir):
     """
 
     area_dict = {area: dict() for area in areas}
-
+    import re # for removing part num for masks, e.g. tibu1 -> tibu
+    
     for area in area_dict:
         
-        area_dict[area]["pos_mask_gpkg"] = "{}{}_mask.gpkg".format(pos_mask_dir, area)
-        area_dict[area]["neg_mask_gpkg"] = "{}{}-samples.gpkg".format(neg_mask_dir, area)
+        area_dict[area]["pos_mask_gpkg"] = "{}{}_mask.gpkg".format(pos_mask_dir, re.sub('[^a-z]','',area))
+        area_dict[area]["neg_mask_gpkg"] = "{}{}-samples.gpkg".format(neg_mask_dir, re.sub('[^a-z]','',area))
         
         image_files, image_cropped, indices_cropped = [], [], []
         for image_file in os.listdir(sentinel_dir):
@@ -686,6 +687,10 @@ def get_neg_raster_mask(area_dict, plot=False):
                 | (gdf["class"] == "formal settlement")
             ]
             shape_file = shape_file.replace("samples", "masks")
+            # solve fiona CRSError: Invalid input to create CRS
+            from fiona.crs import to_string
+            fcrs = to_string({'init': 'epsg:4326', 'no_defs': True})
+            gdf.crs = fcrs
             gdf.to_file(shape_file, driver="GPKG")
 
             # Generate masks
