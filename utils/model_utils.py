@@ -25,7 +25,9 @@ AREA_CODES = {
     1 : 'Riohacha', 
     2 : 'Uribia', 
     3 : 'Arauca1', 
-    4 : 'Cucuta'
+    4 : 'Cucuta',
+    5 : 'Arauquita', 
+    6 : 'Tibu',
 }
 VALUE_CODES = {
     'Informal settlement': 1, 
