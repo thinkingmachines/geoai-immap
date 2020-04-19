@@ -181,7 +181,7 @@ def sen2median(
     https://developers.google.com/earth-engine/python_install#syntax
         
     '''
-
+    
     # set date window
     if (min_dt is None) | (max_dt is None):
         date1 = f'{year}-01-01'
