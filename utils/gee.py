@@ -162,13 +162,18 @@ def cloud_mask(img) :
     mask = cloud.eq(0)
     return s2.updateMask(mask)
 
-def sen2median(BBOX, year, FILENAME):
+def sen2median(
+    BBOX, year = 2020, FILENAME = 'gee_sample', cloud_pct = 100,
+    min_dt = None, max_dt = None,
+    ):
     '''
     Downloads Sentinel Year Median Aggregate Composite for specified bounding box and year.
     For status, check https://code.earthengine.google.com/
     
     Args
         BBOX (list of 4 floats): bounding box coordinates; x,y left, top, right, bottom
+        cloud_pct (int): 0 to 100 filter only to images with Cloud pixel percentage less than cloud_pct
+        min_dt, max_dt (str): 'yyyy-mm-dd' min/max date to search images on. If is None, will use year param
     
     References
     https://github.com/samsammurphy/cloud-masking-sentinel2
@@ -176,19 +181,23 @@ def sen2median(BBOX, year, FILENAME):
     https://developers.google.com/earth-engine/python_install#syntax
         
     '''
-    
+
+    # set date window
+    if (min_dt is None) | (max_dt is None):
+        date1 = f'{year}-01-01'
+        date2 = f'{year}-12-31'
+    else:
+        date1 = min_dt
+        date2 = max_dt
+        
     # select product
     print(f'Processing {FILENAME}')
-    if year <= 2017:
+    if int(date1[0:4]) <= 2017:
         PRODUCT = 'COPERNICUS/S2' # S2 for L1C <=2017 
     else:
         PRODUCT = 'COPERNICUS/S2_SR' # and S2_SR for L2A
 
     print(f'using {PRODUCT}')
-          
-    # set date window
-    date1 = f'{year}-01-01'
-    date2 = f'{year}-12-31'
 
     # select region
     region = ee.Geometry.Rectangle(BBOX) # restrict view to bounding box
@@ -198,8 +207,8 @@ def sen2median(BBOX, year, FILENAME):
     #obtain the S2 image
     S2 = (ee.ImageCollection(PRODUCT)
      .filterDate(date1, date2)
-     .filterBounds(region))
-    # .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 10))
+     .filterBounds(region)
+     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", cloud_pct)))
 
 
     # # View specific images
