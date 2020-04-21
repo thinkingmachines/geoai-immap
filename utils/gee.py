@@ -162,13 +162,18 @@ def cloud_mask(img) :
     mask = cloud.eq(0)
     return s2.updateMask(mask)
 
-def sen2median(BBOX, year, FILENAME):
+def sen2median(
+    BBOX, year = 2020, FILENAME = 'gee_sample', cloud_pct = 100,
+    min_dt = None, max_dt = None,
+    ):
     '''
     Downloads Sentinel Year Median Aggregate Composite for specified bounding box and year.
     For status, check https://code.earthengine.google.com/
     
     Args
         BBOX (list of 4 floats): bounding box coordinates; x,y left, top, right, bottom
+        cloud_pct (int): 0 to 100 filter only to images with Cloud pixel percentage less than cloud_pct
+        min_dt, max_dt (str): 'yyyy-mm-dd' min/max date to search images on. If is None, will use year param
     
     References
     https://github.com/samsammurphy/cloud-masking-sentinel2
@@ -177,18 +182,22 @@ def sen2median(BBOX, year, FILENAME):
         
     '''
     
+    # set date window
+    if (min_dt is None) | (max_dt is None):
+        date1 = f'{year}-01-01'
+        date2 = f'{year}-12-31'
+    else:
+        date1 = min_dt
+        date2 = max_dt
+        
     # select product
     print(f'Processing {FILENAME}')
-    if year <= 2017:
+    if int(date1[0:4]) <= 2017:
         PRODUCT = 'COPERNICUS/S2' # S2 for L1C <=2017 
     else:
         PRODUCT = 'COPERNICUS/S2_SR' # and S2_SR for L2A
 
     print(f'using {PRODUCT}')
-          
-    # set date window
-    date1 = f'{year}-01-01'
-    date2 = f'{year}-12-31'
 
     # select region
     region = ee.Geometry.Rectangle(BBOX) # restrict view to bounding box
@@ -198,8 +207,8 @@ def sen2median(BBOX, year, FILENAME):
     #obtain the S2 image
     S2 = (ee.ImageCollection(PRODUCT)
      .filterDate(date1, date2)
-     .filterBounds(region))
-    # .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 10))
+     .filterBounds(region)
+     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", cloud_pct)))
 
 
     # # View specific images
@@ -327,7 +336,8 @@ def deflatecrop_all(repl, output_dir, adm_dir, tmp_dir):
         logging.info('looping')
         i = 1
         for p in repl:
-            output = p.split('0000')[0] + '_p{}.tif'.format(i)
+            splt = p.split('_')
+            output = '_'.join(splt[0:2]) + str(i) + '_' + splt[2][0:4]
             deflatecrop1(
                 repl = p, 
                 output_dir = output_dir, 

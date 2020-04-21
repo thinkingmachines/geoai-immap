@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from pathlib import Path
+import subprocess
 import matplotlib.pyplot as plt
 
 import geopandas as gpd
@@ -15,6 +16,9 @@ from rasterio.windows import (
 )
 from rasterio import features
 import rasterio.mask
+from rasterio.plot import show
+
+la_guajira = ['maicao', 'riohacha', 'uribia']
 
 def write_indices(area_dict, area):
     """
@@ -138,11 +142,12 @@ def get_preds_windowing(area, area_dict, model, tmp_dir, best_features, scaler, 
         df_inds = read_inds_window(area_dict, area, window=window)
         df_test = pd.concat((df_bands, df_inds), axis = 1)
         df_test = rename_indcols(df_test)
+        df_test = df_test.replace([np.inf, -np.inf], 0)
 
         # pred =====
 
         X_test = df_test[best_features].fillna(0)
-        all_zeroes = (X_test.sum(axis=1) == 0 )
+        all_zeroes = (X_test.iloc[:, :-1].sum(axis=1) == 0 )
         if scaler != None:
             X_test = scaler.transform(X_test)
             
@@ -150,9 +155,11 @@ def get_preds_windowing(area, area_dict, model, tmp_dir, best_features, scaler, 
         features = best_features
 
         # Prettify tiff
-        preds = model._predict_proba_lr(data)[:, 1]
+        #preds = model._predict_proba_lr(data)[:, 1]
+        preds = model.predict_proba(data)[:, 1]
         if threshold > 0:
             preds[(preds < threshold)] = 0
+            
         preds[all_zeroes] = -1
 
         # Save =====
@@ -175,8 +182,24 @@ def stitch(output, tmp_dir):
     file_list = [str(f) for f in list(p.glob('tmp*.tif'))]
     files_string = " ".join(file_list)
     command = "gdal_merge.py -n -1 -a_nodata -1 -o {} -of gtiff ".format(output) + files_string
-    print("Stitching all rasters into one")
-    os.system(command)
+
+    text = '''
+
+    # set conda env for these commands - took me 3h to figure out
+    eval "$(conda shell.bash hook)"
+    conda activate ee
+
+    {}
+
+    '''.format(command)
+
+    f = open(tmp_dir + "stitch.sh", "w")
+    f.write(text)
+    f.close()
+
+    result = subprocess.run('sh ' + tmp_dir + 'stitch.sh', shell = True, stdout=subprocess.PIPE)
+
+    return result
 
 def rename_indcols(df):
     """Renames columns according to column names used by model"""
@@ -282,6 +305,10 @@ def read_bands_window(area_dict, area, window):
         del subdata
     
     data = pd.concat(data, axis=1)
+    if area in la_guajira:
+        data['la_guajira'] = 1
+    else:
+        data['la_guajira'] = 0
     
     return data
 
@@ -435,10 +462,15 @@ def read_bands(area_dict, area):
             column + '_' + str(year) 
             for column in subdata.columns
         ]
+        
         data.append(subdata)
         del subdata
     
     data = pd.concat(data, axis=1)
+    if area in la_guajira:
+        data['la_guajira'] = 1
+    else:
+        data['la_guajira'] = 0
     
     return data
 
@@ -482,7 +514,7 @@ def generate_training_data(area_dict):
         area_code[area] = idx
 
         # Get non-zero rows
-        subdata = subdata[subdata.values.sum(axis=1) != 0] 
+        subdata = subdata[subdata.iloc[:, :-3].values.sum(axis=1) != 0] 
         data.append(subdata)
 
     # Concatenate all areas
@@ -504,11 +536,12 @@ def get_filepaths(areas, sentinel_dir, pos_mask_dir, neg_mask_dir):
     """
 
     area_dict = {area: dict() for area in areas}
-
+    import re # for removing part num for masks, e.g. tibu1 -> tibu
+    
     for area in area_dict:
         
-        area_dict[area]["pos_mask_gpkg"] = "{}{}_mask.gpkg".format(pos_mask_dir, area)
-        area_dict[area]["neg_mask_gpkg"] = "{}{}-samples.gpkg".format(neg_mask_dir, area)
+        area_dict[area]["pos_mask_gpkg"] = "{}{}_mask.gpkg".format(pos_mask_dir, re.sub('[^a-z]','',area))
+        area_dict[area]["neg_mask_gpkg"] = "{}{}-samples.gpkg".format(neg_mask_dir, re.sub('[^a-z]','',area))
         
         image_files, image_cropped, indices_cropped = [], [], []
         for image_file in os.listdir(sentinel_dir):
@@ -568,6 +601,7 @@ def generate_mask(tiff_file, shape_file, output_file, plot=False):
     gdf = gpd.read_file(shape_file)
 
     values = {}
+        
     if "class" in gdf.columns:
         unique_classes = sorted(gdf["class"].unique())
         values = {value: x + 2 for x, value in enumerate(unique_classes)}
@@ -575,7 +609,6 @@ def generate_mask(tiff_file, shape_file, output_file, plot=False):
     
     value = 1.0
     shapes = []
-    
     for index, (idx, x) in enumerate(gdf.iterrows()):
         band = 255 / ((idx / gdf.shape[0]) + 1)
         if "class" in x:
@@ -610,8 +643,7 @@ def generate_mask(tiff_file, shape_file, output_file, plot=False):
         
     return image, values
 
-
-def get_pos_raster_mask(area_dict):
+def get_pos_raster_mask(area_dict, plot=False):
     """
     Converts positive vector label files (GPKG) to raster masks (TIFF)
     
@@ -634,7 +666,7 @@ def get_pos_raster_mask(area_dict):
             tiff_file=tiff_file,
             shape_file=shape_file,
             output_file=target_file,
-            plot=False,
+            plot=plot,
         )
 
         # Set filepath of raster mask in the area dictionary
@@ -643,7 +675,7 @@ def get_pos_raster_mask(area_dict):
     return area_dict
 
 
-def get_neg_raster_mask(area_dict):
+def get_neg_raster_mask(area_dict, plot=False):
     """
     Converts negative vector label files (GPKG) to raster masks (TIFF)
     
@@ -656,7 +688,7 @@ def get_neg_raster_mask(area_dict):
     """
 
     for area, value in area_dict.items():
-
+    
         # Get filepaths
         tiff_file = value["images_cropped"][0]
         shape_file = value["neg_mask_gpkg"]
@@ -666,12 +698,16 @@ def get_neg_raster_mask(area_dict):
 
             # Read vector file + geopandas cleanup
             gdf = gpd.read_file(shape_file)
-            gdf["class"] = gdf["class"].str.lower()
+            gdf["class"] = gdf["class"].str.lower().str.strip()
             gdf = gdf[
                 (gdf["class"] == "unoccupied land")
                 | (gdf["class"] == "formal settlement")
             ]
             shape_file = shape_file.replace("samples", "masks")
+            # solve fiona CRSError: Invalid input to create CRS
+            from fiona.crs import to_string
+            fcrs = to_string({'init': 'epsg:4326', 'no_defs': True})
+            gdf.crs = fcrs
             gdf.to_file(shape_file, driver="GPKG")
 
             # Generate masks
@@ -679,8 +715,9 @@ def get_neg_raster_mask(area_dict):
                 tiff_file=tiff_file,
                 shape_file=shape_file,
                 output_file=target_file,
-                plot=False,
+                plot=plot,
             )
+            
         # Set filepath of raster mask in the area dictionary
         area_dict[area]["neg_mask_tiff"] = target_file
         
