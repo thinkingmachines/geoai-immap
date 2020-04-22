@@ -18,22 +18,57 @@ from sklearn.feature_selection import (
 )
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import Pipeline
 
 AREA_CODES = {
     0 : 'Maicao', 
     1 : 'Riohacha', 
     2 : 'Uribia', 
-    3 : 'Arauca1', 
+    3 : 'Arauca', 
     4 : 'Cucuta',
-    5 : 'Arauquita', 
-    6 : 'Tibu',
+    5 : 'Tibu',
+    6 : 'Arauquita', 
 }
+
 VALUE_CODES = {
     'Informal settlement': 1, 
     'Formal settlement': 2, 
     'Unoccupied land': 3
 }
+
+def nested_cross_validation(clf, data, features, labels, param_grid):
+    X = data[features]
+    y = data[label]
+    groups = data['area']
+    
+    inner_cv = get_cv_iterator(data)
+    outer_cv = get_cv_iterator(data)
+    
+    scoring = {
+        'accuracy' : 'accuracy', 
+        'precision' : 'precision', 
+        'recall' : 'recall',
+        'kappa' : make_scorer(cohen_kappa_score)
+    }
+    
+    cv = GridSearchCV(estimator=svm, param_grid=param_grid, cv=inner_cv)
+    nested_scores = cross_validate(clf, X, y, cv=outer_cv, scoring=scoring)
+    
+    return nested_scores
+
+def rfecv_feature_selection(clf, data, features, label, scoring='f1', step=10, verbose=0):
+    X = data[features]
+    y = data[label]
+    
+    cv_iterator = get_cv_iterator(data)
+    rfe_selector = RFECV(clf, step=step, cv=cv_iterator, scoring=scoring, verbose=verbose, n_jobs=-1)
+    rfe_selector = rfe_selector.fit(X, y)
+    
+    rfe_support = rfe_selector.support_
+    rfe_features = X.loc[:, rfe_support].columns.tolist()
+    
+    return rfe_features
 
 def get_cv_iterator(data):
     cv_iterator = []
@@ -69,19 +104,6 @@ def hyperparameter_optimization(data, features, label, clf, param_grid, verbose=
     print('Best Paramaters: {}'.format(cv.best_params_))
     
     return cv
-
-def rfecv_feature_selection(clf, data, features, label, scoring='f1', step=10, verbose=0):
-    X = data[features]
-    y = data[label]
-    
-    cv_iterator = get_cv_iterator(data)
-    rfe_selector = RFECV(clf, step=step, cv=cv_iterator, scoring=scoring, verbose=verbose, n_jobs=-1)
-    rfe_selector = rfe_selector.fit(X, y)
-    
-    rfe_support = rfe_selector.support_
-    rfe_features = X.loc[:, rfe_support].columns.tolist()
-    
-    return rfe_features
 
 def evaluate_model(model, X_test, y_test, area, scaler=None, verbose=0):
     if scaler != None:
