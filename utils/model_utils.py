@@ -11,12 +11,16 @@ from sklearn.metrics import (
     classification_report,
     cohen_kappa_score
 )
+from pandas_ml import ConfusionMatrix
 from sklearn.feature_selection import (
     SelectKBest,
     RFE,
     RFECV
 )
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import (
+    MinMaxScaler,
+    StandardScaler
+)
 from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import Pipeline
@@ -30,87 +34,49 @@ AREA_CODES = {
     5 : 'Tibu',
     6 : 'Arauquita', 
 }
-
 VALUE_CODES = {
     'Informal settlement': 1, 
     'Formal settlement': 2, 
     'Unoccupied land': 3
 }
 
-def nested_cross_validation(clf, data, features, labels, param_grid):
-    X = data[features]
-    y = data[label]
-    groups = data['area']
+def get_cv_iterator(data):
     
-    inner_cv = get_cv_iterator(data)
-    outer_cv = get_cv_iterator(data)
+    # Get list of unique areas
+    areas = list(data.area.unique())
     
-    scoring = {
-        'accuracy' : 'accuracy', 
-        'precision' : 'precision', 
-        'recall' : 'recall',
-        'kappa' : make_scorer(cohen_kappa_score)
-    }
-    
-    cv = GridSearchCV(estimator=svm, param_grid=param_grid, cv=inner_cv)
-    nested_scores = cross_validate(clf, X, y, cv=outer_cv, scoring=scoring)
-    
-    return nested_scores
+    # Split the dataset into train test indices
+    cv_iterator = []
+    for area in areas:
+        train_indices = data[data.area != area].index.values.astype(int)
+        test_indices = data[data.area == area].index.values.astype(int)
+        cv_iterator.append( (train_indices, test_indices) )
+            
+    return cv_iterator, [AREA_CODES[x] for x in areas]
 
-def rfecv_feature_selection(clf, data, features, label, scoring='f1', step=10, verbose=0):
-    X = data[features]
-    y = data[label]
+def rfecv_feature_selection(clf, X, y, cv, scoring='f1', step=10, verbose=0):    
+     
+    # Instantiate RFE feature selector
+    rfe_selector = RFECV(
+        clf, step=step, cv=cv, scoring=scoring, verbose=verbose, n_jobs=-1
+    )
     
-    cv_iterator = get_cv_iterator(data)
-    rfe_selector = RFECV(clf, step=step, cv=cv_iterator, scoring=scoring, verbose=verbose, n_jobs=-1)
+    # Fit RFE feature selector
     rfe_selector = rfe_selector.fit(X, y)
     
+    # Get selected features
     rfe_support = rfe_selector.support_
     rfe_features = X.loc[:, rfe_support].columns.tolist()
     
     return rfe_features
 
-def get_cv_iterator(data):
-    cv_iterator = []
+def evaluate_model(clf, X_test, y_test, verbose=0):
     
-    for area in data.area.unique():
-        train_indices = data[data.area != area].index.values.astype(int)
-        test_indices = data[data.area == area].index.values.astype(int)
-        cv_iterator.append( (train_indices, test_indices) )
+    # Predict on test set
+    y_pred = clf.predict(X_test)
     
-    return cv_iterator
-
-def hyperparameter_optimization(data, features, label, clf, param_grid, verbose=0, scoring='f1'):
-    cv_iterator = get_cv_iterator(data)
-    
-    X = data[features]
-    y = data[label]
-        
-    pipe_clf = Pipeline([
-        ('scaler',  MinMaxScaler()),
-        ('classifier', clf)
-    ])
-
-    cv = GridSearchCV(
-        estimator=pipe_clf, 
-        param_grid=param_grid,
-        cv=cv_iterator, 
-        verbose=verbose, 
-        scoring=scoring,
-        n_jobs=-1
-    )
-    cv.fit(X, y)
-    
-    print('Best Paramaters: {}'.format(cv.best_params_))
-    
-    return cv
-
-def evaluate_model(model, X_test, y_test, area, scaler=None, verbose=0):
-    if scaler != None:
-        X_test = scaler.transform(X_test)
-        
-    y_pred = model.predict(X_test)
-  
+    # Calculate metrics
+    y_test, y_pred = list(y_test), list(y_pred)
     f1_score_ = f1_score(y_test, y_pred, pos_label=1, average='binary')  
     precision = precision_score(y_test, y_pred, pos_label=1, average='binary') 
     recall = recall_score(y_test, y_pred, pos_label=1, average='binary') 
@@ -118,80 +84,142 @@ def evaluate_model(model, X_test, y_test, area, scaler=None, verbose=0):
     kappa = cohen_kappa_score(y_test, y_pred)
   
     if verbose > 1:
-        print(confusion_matrix(y_test, y_pred))
-        print(classification_report(y_test, y_pred)) 
-        print('{} Results: '.format(area))
-        print('- F1 Score: {:.4f}'.format(f1_score_))
-        print('- Kappa Statistics: {:.4f}'.format(kappa))
-        print('- Precision: {:.4f}'.format(precision))
-        print('- Recall: {:.4f}'.format(recall))
-        print('- Accuracy: {:.4f}'.format(accuracy))
+        print()
+        print(ConfusionMatrix(y_test, y_pred))
+        print('\n', classification_report(y_test, y_pred)) 
+        print('F1 Score: {:.4f}'.format(f1_score_))
+        print('Kappa Statistics: {:.4f}'.format(kappa))
+        print('Precision: {:.4f}'.format(precision))
+        print('Recall: {:.4f}'.format(recall))
+        print('Accuracy: {:.4f}'.format(accuracy))
+        print()
 
     return accuracy, f1_score_, precision, recall, kappa
 
-def geospatialcv(data, features, label, clf, scale=False, verbose=0):
+def nested_spatial_cv(clf, X, y, splits, param_grid, search_type='grid', verbose=0):
     
-    data = data.fillna(0)
-    accuracies, f1_scores, precisions, recalls, kappas = [], [], [], [], []
-    classifiers = []
+    scores = {
+        'f1_score' : [],
+        'kappa' : [],
+        'precision' : [],
+        'recall' : [],
+        'accuracy' : []
+    }
     
-    for area in data.area.unique():
+    outer_cv, areas = get_cv_iterator(splits)
+    for (train_indices, test_indices), area in zip(outer_cv, areas):
         
-        area_str = AREA_CODES[area].upper()
-        if verbose > 1:
-            print('\nTest set: {}'.format(area_str))
+        splits_train = splits.loc[train_indices].reset_index(drop=True)    
+        X_train = X.loc[train_indices].reset_index(drop=True)
+        X_test = X.loc[test_indices].reset_index(drop=True)
+        y_train = y.loc[train_indices].reset_index(drop=True)
+        y_test = y.loc[test_indices].reset_index(drop=True)
         
-        # Split into training and test sets
-        train = data[data.area != area]
-        test = data[data.area == area]
+        inner_cv, _ = get_cv_iterator(splits_train)
         
-        X_train, X_test = train[features], test[features]
-        y_train, y_test = train[label], test[label]
+        best_features = rfecv_feature_selection(
+            clf, X_train, y_train, inner_cv, scoring='f1', step=10, verbose=0
+        )
         
-        # Scale/transform features
-        scaler = MinMaxScaler()
-        scaler.fit(X_train)
-        X_train = scaler.transform(X_train)
+        pipe_clf = Pipeline([
+            ('scaler',  MinMaxScaler()),
+            ('classifier', clf)
+        ])
         
-        # Fit classifier to training set
-        clf.fit(X_train, y_train)
+        if search_type == 'grid':
+            cv = GridSearchCV(
+                estimator=pipe_clf, 
+                param_grid=param_grid,
+                cv=inner_cv, 
+                verbose=verbose, 
+                scoring='f1',
+                n_jobs=-1
+            )
+        elif search_type == 'random':
+            cv = RandomizedSearchCV(
+                estimator=pipe_clf, 
+                param_distributions=param_grid,
+                n_iter=10,
+                cv=inner_cv, 
+                verbose=verbose, 
+                scoring='f1',
+                n_jobs=-1
+            )
+        cv.fit(X_train[best_features], y_train)
         
-        # Evaluate model
-        acc, f1, prec, rec, kappa = evaluate_model(
-            clf, 
-            X_test, 
-            y_test, 
-            area_str, 
-            scaler=scaler, 
-            verbose=verbose
+        best_estimator = cv.best_estimator_
+        best_estimator.fit(X_train[best_features], y_train)
+        
+        if verbose > 0: print("Test Set: {}".format(area))
+        accuracy, f1_score_, precision, recall, kappa = evaluate_model(
+            best_estimator, X_test[best_features], y_test, verbose=verbose
         )
         
         # Save results
-        accuracies.append(acc)
-        precisions.append(prec)
-        recalls.append(rec)
-        f1_scores.append(f1)
-        kappas.append(kappa)
-        classifiers.append(clf)
-    
-    results = {
-        'avg_accuracy' : np.mean(accuracies),
-        'avg_f1_score' : np.mean(f1_scores),
-        'avg_precision' : np.mean(precisions),
-        'avg_recall' : np.mean(recalls),
-        'avg_kappa' : np.mean(kappas)
-    }
+        scores['f1_score'].append(f1_score_)
+        scores['kappa'].append(kappa)
+        scores['precision'].append(precision)
+        scores['recall'].append(recall)
+        scores['accuracy'].append(accuracy)
     
     if verbose > 0:
         print()
-        print('Average F1 Score: {:.4f}'.format(results['avg_f1_score']))
-        print('Average Kappa statistic: {:.4f}'.format(results['avg_kappa']))
-        print('Average Precision: {:.4f}'.format(results['avg_precision']))
-        print('Average Recall: {:.4f}'.format(results['avg_recall']))
-        print('Average Accuracy: {:.4f}'.format(results['avg_accuracy']))
+        print('Mean F1 Score: {:.4f}'.format(np.mean(scores['f1_score'])))
+        print('Mean Kappa statistic: {:.4f}'.format(np.mean(scores['kappa'])))
+        print('Mean Precision: {:.4f}'.format(np.mean(scores['precision'])))
+        print('Mean Recall: {:.4f}'.format(np.mean(scores['recall'])))
+        print('Mean Accuracy: {:.4f}'.format(np.mean(scores['accuracy'])))
         print()
     
-    return results, classifiers
+    return scores
+
+def spatial_cv(clf, X, y, splits, verbose=0):
+    
+    scores = {
+        'f1_score' : [],
+        'kappa' : [],
+        'precision' : [],
+        'recall' : [],
+        'accuracy' : []
+    }
+    
+    cv, areas = get_cv_iterator(splits)
+    for (train_indices, test_indices), area in zip(cv, areas):
+        
+        # Split into train and test splits
+        X_train, X_test = X.loc[train_indices], X.loc[test_indices]
+        y_train, y_test = y.loc[train_indices], y.loc[test_indices]
+        
+        # Fit classifier to training set
+        pipe_clf = Pipeline([
+            ('scaler',  MinMaxScaler()),
+            ('classifier', clf)
+        ])
+        pipe_clf.fit(X_train, y_train)
+        
+        # Evaluate model
+        if verbose > 0: print('\nTest Set: {}'.format(area))
+        accuracy, f1_score_, precision, recall, kappa = evaluate_model(
+            pipe_clf, X_test, y_test, verbose=verbose
+        )
+        
+        # Save results
+        scores['f1_score'].append(f1_score_)
+        scores['kappa'].append(kappa)
+        scores['precision'].append(precision)
+        scores['recall'].append(recall)
+        scores['accuracy'].append(accuracy)
+        
+    if verbose > 0:
+        print()
+        print('Mean F1 Score: {:.4f}'.format(np.mean(scores['f1_score'])))
+        print('Mean Kappa statistic: {:.4f}'.format(np.mean(scores['kappa'])))
+        print('Mean Precision: {:.4f}'.format(np.mean(scores['precision'])))
+        print('Mean Recall: {:.4f}'.format(np.mean(scores['recall'])))
+        print('Mean Accuracy: {:.4f}'.format(np.mean(scores['accuracy'])))
+        print()
+    
+    return scores
 
 def resample(data, num_neg_samples, neg_dist, random_state):    
     data_area = []
