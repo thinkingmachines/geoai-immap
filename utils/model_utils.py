@@ -21,7 +21,10 @@ from sklearn.preprocessing import (
     MinMaxScaler,
     StandardScaler
 )
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import (
+    GridSearchCV,
+    RandomizedSearchCV
+)
 from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import Pipeline
 
@@ -96,7 +99,7 @@ def evaluate_model(clf, X_test, y_test, verbose=0):
 
     return accuracy, f1_score_, precision, recall, kappa
 
-def nested_spatial_cv(clf, X, y, splits, param_grid, search_type='grid', verbose=0):
+def nested_spatial_cv(clf, X, y, splits, param_grid, search_type='grid', verbose=0, random_state=42):
     
     scores = {
         'f1_score' : [],
@@ -143,7 +146,8 @@ def nested_spatial_cv(clf, X, y, splits, param_grid, search_type='grid', verbose
                 cv=inner_cv, 
                 verbose=verbose, 
                 scoring='f1',
-                n_jobs=-1
+                n_jobs=-1,
+                random_state=random_state
             )
         cv.fit(X_train[best_features], y_train)
         
