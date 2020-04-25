@@ -17,10 +17,11 @@ from rasterio.windows import (
 from rasterio import features
 import rasterio.mask
 from rasterio.plot import show
+from fiona.crs import to_string
 
-la_guajira = ['maicao', 'riohacha', 'uribia']
+la_guajira = ['maicao', 'uribia', 'riohacha']
 
-def write_indices(area_dict, area):
+def write_indices(area_dict, area, indices_dir):
     """
     Reads the bands for each image of each area and calculates the derived indices. 
     
@@ -32,8 +33,9 @@ def write_indices(area_dict, area):
         data (pd.DataFrame) : The resulting pandas dataframe containing the raw spectral
                               bands and derived indices
     """
+    
     subdata = {}
-    image_list = area_dict[area]['images_cropped']
+    image_list = area_dict[area]['images']
     
     # Iterate over each year
     for image_file in tqdm(image_list, total=len(image_list)):
@@ -64,7 +66,8 @@ def write_indices(area_dict, area):
                 (src.height,src.width)
             ).astype(np.float64)
         
-        output_file = image_file.replace('CROPPED', 'CROPPED_INDICES')
+        output_file = indices_dir + 'indices_' + area + '_' + year + '.tif'
+        area_dict[area]['indices'].append(output_file)
                 
         out_meta = src.meta
         out_meta.update({
@@ -77,7 +80,7 @@ def write_indices(area_dict, area):
         })
         
         out_meta.update(count = 10)
-        with rasterio.open(output_file, 'w', **out_meta) as dst:
+        with rasterio.open(output_file, 'w', **out_meta, compress='deflate') as dst:
             dst.write(subdata["ndvi"], 1)
             dst.write(subdata["ndbi"], 2)
             dst.write(subdata["savi"], 3)
@@ -88,10 +91,12 @@ def write_indices(area_dict, area):
             dst.write(subdata["nbai"], 8)
             dst.write(subdata["mbi"], 9)
             dst.write(subdata["baei"], 10)
+            
+    return area_dict
 
 def save_predictions_window(pred, image_src, output_file, window, tfm):
     """
-    Saves the predictions as a TIFF file, based on a source image.
+    Saves the predictions as a TIFF file, using img_source as reference.
     
     Args:
         pred (numpy array) : The array containing the predictions
@@ -120,88 +125,7 @@ def save_predictions_window(pred, image_src, output_file, window, tfm):
         with rio.open(output_file, "w", **out_meta, compress='deflate') as dest:
             dest.write(out_image, 1)
 
-def get_preds_windowing(area, area_dict, model, tmp_dir, best_features, scaler, output, grid_blocks=5, threshold=0):
-
-    # Delete tmp files from previous run
-    if Path(output).is_file(): 
-        os.remove(output)
-    p = Path(tmp_dir)
-    tmp_files = [str(f) for f in list(p.glob('tmp*.tiff'))]
-    for f in tmp_files:
-        os.remove(f)
-
-    # Read bands =====
-
-    print('Reading {}...'.format(area))
-    src_file = area_dict[area]['images_cropped'][0]
-    windows = make_windows(src_file, grid_blocks = grid_blocks)
-
-    for idx, window in enumerate(tqdm(windows)):
-
-        df_bands = read_bands_window(area_dict, area, window=window)
-        df_inds = read_inds_window(area_dict, area, window=window)
-        df_test = pd.concat((df_bands, df_inds), axis = 1)
-        df_test = rename_indcols(df_test)
-        df_test = df_test.replace([np.inf, -np.inf], 0)
-
-        # pred =====
-
-        X_test = df_test[best_features].fillna(0)
-        all_zeroes = (X_test.iloc[:, :-1].sum(axis=1) == 0 )
-        if scaler != None:
-            X_test = scaler.transform(X_test)
-            
-        data = X_test
-        features = best_features
-
-        # Prettify tiff
-        #preds = model._predict_proba_lr(data)[:, 1]
-        preds = model.predict_proba(data)[:, 1]
-        if threshold > 0:
-            preds[(preds < threshold)] = 0
-            
-        preds[all_zeroes] = -1
-
-        # Save =====
-
-        image_src = src_file
-        output_file = tmp_dir + 'tmp{}.tif'.format(idx)
-        tfm = transform(window, transform = rio.open(src_file).transform)
-        save_predictions_window(preds, image_src, output_file, window, tfm)
-
-    print('Saving to {}...'.format(output))
-    stitch(output, tmp_dir)
-
-def stitch(output, tmp_dir):
-    """
-    Merges all raster files to one
-    Source: https://gis.stackexchange.com/questions/230553/merging-all-tiles-from-one-directory-using-gdal
-    """
-    
-    p = Path(tmp_dir)
-    file_list = [str(f) for f in list(p.glob('tmp*.tif'))]
-    files_string = " ".join(file_list)
-    command = "gdal_merge.py -n -1 -a_nodata -1 -o {} -of gtiff ".format(output) + files_string
-
-    text = '''
-
-    # set conda env for these commands - took me 3h to figure out
-    eval "$(conda shell.bash hook)"
-    conda activate ee
-
-    {}
-
-    '''.format(command)
-
-    f = open(tmp_dir + "stitch.sh", "w")
-    f.write(text)
-    f.close()
-
-    result = subprocess.run('sh ' + tmp_dir + 'stitch.sh', shell = True, stdout=subprocess.PIPE)
-
-    return result
-
-def rename_indcols(df):
+def rename_ind_cols(df):
     """Renames columns according to column names used by model"""
     cols = [c for c in df.columns if 'I' in c]
     renaming = {}
@@ -224,7 +148,107 @@ def rename_indcols(df):
         col_n = col.replace(pat, ind_dict[pat])
         renaming[col] = col_n
 
-    return df.rename(columns = renaming)
+    return df.rename(columns = renaming)            
+
+def get_preds_windowing(
+    area, 
+    area_dict, 
+    model, 
+    tmp_dir, 
+    best_features, 
+    scaler, 
+    output, 
+    grid_blocks=5, 
+    threshold=0
+):
+
+    # Delete tmp files from previous run
+    if Path(output).is_file(): 
+        os.remove(output)
+        
+    p = Path(tmp_dir)
+    tmp_files = [str(f) for f in list(p.glob('tmp*.tiff'))]
+    for f in tmp_files:
+        os.remove(f)
+
+    # Read bands 
+
+    print('Reading {}...'.format(area))
+    src_file = area_dict[area]['images'][0]
+    windows = make_windows(src_file, grid_blocks = grid_blocks)
+
+    for idx, window in enumerate(tqdm(windows)):
+
+        df_bands = read_bands_window(area_dict, area, window=window)
+        df_inds = read_inds_window(area_dict, area, window=window)
+        df_test = pd.concat((df_bands, df_inds), axis = 1)
+        df_test = rename_ind_cols(df_test)
+        df_test = df_test.replace([np.inf, -np.inf], 0)
+
+        # Prediction
+
+        X_test = df_test[best_features].fillna(0)
+        all_zeroes = (X_test.iloc[:, :-1].sum(axis=1) == 0 )
+        if scaler != None:
+            X_test = scaler.transform(X_test)
+            
+        data = X_test
+        features = best_features
+
+        # Prettify Tiff
+        #preds = model._predict_proba_lr(data)[:, 1]
+        preds = model.predict_proba(data)[:, 1]
+        if threshold > 0:
+            preds[(preds < threshold)] = 0
+            
+        preds[all_zeroes] = -1
+
+        # Save 
+
+        image_src = src_file
+        output_file = tmp_dir + 'tmp{}.tif'.format(idx)
+        tfm = transform(window, transform = rio.open(src_file).transform)
+        save_predictions_window(preds, image_src, output_file, window, tfm)
+
+    print('Saving to {}...'.format(output))
+    stitch(output, tmp_dir)
+
+def stitch(output_file, tmp_dir):
+    """
+    Merges all raster files to one
+    Source: https://gis.stackexchange.com/questions/230553/merging-all-tiles-from-one-directory-using-gdal
+    
+    Args:
+        output_file (str) : The output filepath
+        tmp_dir (str) : Path to temporary directory
+        
+    Returns:
+        result () : The stitched image
+    
+    """
+    
+    p = Path(tmp_dir)
+    file_list = [str(f) for f in list(p.glob('tmp*.tif'))]
+    files_string = " ".join(file_list)
+    command = "gdal_merge.py -n -1 -a_nodata -1 -o {} -of gtiff ".format(output_file) + files_string
+
+    text = '''
+
+    # set conda env for these commands - took me 3h to figure out
+    eval "$(conda shell.bash hook)"
+    conda activate ee
+
+    {}
+
+    '''.format(command)
+
+    f = open(tmp_dir + "stitch.sh", "w")
+    f.write(text)
+    f.close()
+
+    result = subprocess.run('sh ' + tmp_dir + 'stitch.sh', shell = True, stdout=subprocess.PIPE)
+
+    return result
 
 def read_inds_window(area_dict, area, window):
     """
@@ -241,7 +265,7 @@ def read_inds_window(area_dict, area, window):
     """
     
     data = []
-    image_list = area_dict[area]['indices_cropped']
+    image_list = area_dict[area]['indices']
     
     # Iterate over each year
     for image_file in image_list:
@@ -282,10 +306,10 @@ def read_bands_window(area_dict, area, window):
     """
     
     data = []
-    image_list = area_dict[area]['images_cropped']
+    image_list = area_dict[area]['images']
     
     # Iterate over each year
-    for image_file in image_list:#tqdm(image_list, total=len(image_list)):
+    for image_file in image_list:
         year = image_file.split('_')[-1].split('.')[0]
         
         # Read each band
@@ -365,7 +389,18 @@ def baei(b):
 
 
 def ibi(b):
-    # Source: https://stats.stackexchange.com/questions/178626/how-to-normalize-data-between-1-and-1
+    """
+    Calculates the index-based building index (IBI).
+    Source: https://stats.stackexchange.com/questions/178626/how-to-normalize-data-between-1-and-1
+    
+    Args:
+        area_dict (dict or pd.DataFrame) : A Python dictionary or Python DataFrame containing 
+                                           the 12 band values
+        
+    Returns:
+    
+    
+    """
 
     # Threshold
     t = 0.05
@@ -431,7 +466,7 @@ def read_bands(area_dict, area):
     """
     
     data = []
-    image_list = area_dict[area]['images_cropped']
+    image_list = area_dict[area]['images']
     
     # Iterate over each year
     for image_file in tqdm(image_list, total=len(image_list)):
@@ -515,6 +550,7 @@ def generate_training_data(area_dict):
 
         # Get non-zero rows
         subdata = subdata[subdata.iloc[:, :-3].values.sum(axis=1) != 0] 
+        subdata = subdata[subdata['target'] != 0]
         data.append(subdata)
 
     # Concatenate all areas
@@ -523,7 +559,7 @@ def generate_training_data(area_dict):
     return data, area_code
 
 
-def get_filepaths(areas, sentinel_dir, pos_mask_dir, neg_mask_dir):
+def get_filepaths(areas, images_dir, indices_dir, pos_mask_dir, neg_mask_dir):
     """
     Returns a dictionary containing the image filepaths for each area.
     
@@ -536,25 +572,24 @@ def get_filepaths(areas, sentinel_dir, pos_mask_dir, neg_mask_dir):
     """
 
     area_dict = {area: dict() for area in areas}
-    import re # for removing part num for masks, e.g. tibu1 -> tibu
     
     for area in area_dict:
         
-        area_dict[area]["pos_mask_gpkg"] = "{}{}_mask.gpkg".format(pos_mask_dir, re.sub('[^a-z]','',area))
-        area_dict[area]["neg_mask_gpkg"] = "{}{}-samples.gpkg".format(neg_mask_dir, re.sub('[^a-z]','',area))
+        area_dict[area]["pos_mask_gpkg"] = "{}{}_pos.gpkg".format(pos_mask_dir, area)
+        area_dict[area]["neg_mask_gpkg"] = "{}{}_neg.gpkg".format(neg_mask_dir, area)
         
-        image_files, image_cropped, indices_cropped = [], [], []
-        for image_file in os.listdir(sentinel_dir):
-            if area in image_file and "DEFLATED_gee" in image_file:
-                image_files.append(sentinel_dir + image_file)
-            elif area in image_file and "CROPPED_gee" in image_file:
-                image_cropped.append(sentinel_dir + image_file)
-            elif area in image_file and "CROPPED_INDICES_gee" in image_file:
-                indices_cropped.append(sentinel_dir + image_file)
+        image_files, indices_files = [], []
+        
+        for image_file in os.listdir(images_dir):
+            if area in image_file:
+                image_files.append(images_dir + image_file)
+                
+        for image_file in os.listdir(indices_dir):
+            if area in image_file:
+                indices_files.append(indices_dir + image_file)
                 
         area_dict[area]["images"] = sorted(image_files)
-        area_dict[area]["images_cropped"] = sorted(image_cropped)
-        area_dict[area]["indices_cropped"] = sorted(indices_cropped)
+        area_dict[area]["indices"] = sorted(indices_files)
     
     return area_dict
 
@@ -598,7 +633,7 @@ def generate_mask(tiff_file, shape_file, output_file, plot=False):
     """
 
     src = rio.open(tiff_file)
-    gdf = gpd.read_file(shape_file)
+    gdf = gpd.read_file(shape_file).dropna()
 
     values = {}
         
@@ -657,7 +692,7 @@ def get_pos_raster_mask(area_dict, plot=False):
 
     for area, value in area_dict.items():
         # Get filepaths
-        tiff_file = value["images_cropped"][0]
+        tiff_file = value["images"][0]
         shape_file = value["pos_mask_gpkg"]
         target_file = shape_file.replace("gpkg", "tiff")
 
@@ -690,7 +725,7 @@ def get_neg_raster_mask(area_dict, plot=False):
     for area, value in area_dict.items():
     
         # Get filepaths
-        tiff_file = value["images_cropped"][0]
+        tiff_file = value["images"][0]
         shape_file = value["neg_mask_gpkg"]
         target_file = shape_file.replace("gpkg", "tiff")
 
@@ -698,17 +733,6 @@ def get_neg_raster_mask(area_dict, plot=False):
 
             # Read vector file + geopandas cleanup
             gdf = gpd.read_file(shape_file)
-            gdf["class"] = gdf["class"].str.lower().str.strip()
-            gdf = gdf[
-                (gdf["class"] == "unoccupied land")
-                | (gdf["class"] == "formal settlement")
-            ]
-            shape_file = shape_file.replace("samples", "masks")
-            # solve fiona CRSError: Invalid input to create CRS
-            from fiona.crs import to_string
-            fcrs = to_string({'init': 'epsg:4326', 'no_defs': True})
-            gdf.crs = fcrs
-            gdf.to_file(shape_file, driver="GPKG")
 
             # Generate masks
             _, target_dict = generate_mask(

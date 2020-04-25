@@ -15,8 +15,10 @@ ipython kernel install --user --name=venv
 ## Code Organization
 This repository is divided into three main parts:
 
-- **notebooks/**: contains all Jupyter notebooks for data processing and modeling
 - **data/**: contains the informal settlement datasets; also the destination for downloaded satellite imagery
+- **notebooks/**: contains all Jupyter notebooks for data processing and model experimentation
+- **utils/**: contains utility scripts for geospatial data pre-processing and modeling
+
 
 ## Acknowledgments
 This work is supported by the [iMMAP Colombia](https://immap.org/colombia/).
