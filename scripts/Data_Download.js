@@ -1,22 +1,43 @@
+/******************************************************************************************************/ 
+// This script is meant to be run in the Earth Engine Code Editor (https://code.earthengine.google.com/). To be able to run it, please get Google Earth Credentials here: https://signup.earthengine.google.com/
+//
+// Data Download.js
+//
+// This script takes bounding box and observation period and outputs the aggregate composite.
+//
+// Args:
+//     bounding box (4 lonlat coordinates): coordinates of upper left and lower right points
+//     observation period (start date, end date): period to be aggregated
+//
+// Returns:
+//     aggregate composite (tif file): saved either in Google Drive or Google Cloud Storage
+/******************************************************************************************************/ 
+
+//+++++++++++ INPUTS ++++++++++++++++++++++++++
 // set output params
 var PRODUCT = 'COPERNICUS/S2'; // S2 for L1C <=2017 and S2_SR for L2A
-var FILENAME = 'gee_riohacha_2015_small';
-// var FILENAME = 'glcm_riohacha_2016';
+var FILENAME = 'gee_arauca_2016';
 
 // set date window
-var date1 = ee.Date.fromYMD(2015,1,1); 
-var date2 = ee.Date.fromYMD(2015,12,31); 
+var date1 = ee.Date.fromYMD(2016,1,1); 
+var date2 = ee.Date.fromYMD(2016,12,31);
 
 // select region
-// var BBOX = [-73.171343876, 10.754102423, -72.158197931, 11.754143685]; //satellite image observed
-// var BBOX = [-72.292152, 11.686520, -72.244001, 11.734492]; // uribia urban area
-var BBOX = [-72.949333, 11.564208, -72.884616, 11.507526]; // riohacha urban area
-// var BBOX = [-72.272737, 11.403564, -72.212240, 11.361955]; // maicao urban area
-// var BBOX = [-72.52724612099996, 11.560920839000062, -73.17020892181104, 10.948171764015513]; // riohacha admin boundary
+// x,y left, top, right, bottom
+
+// var BBOX = [-73.17020892181104, 11.560920839000062, -72.52724612099996, 10.948171764015513]; // riohacha admin boundary
 // var BBOX = [-72.65839212899994, 11.534938376940019, -72.15850845943176, 11.080548632000045]; // maicao admin boundary
 // var BBOX = [-72.37971307699996, 11.747684544661437, -72.15636466747618, 11.523307245000069]; // uribia admin boundary
-// var BBOX = [-72.235049, 11.615007, -72.189534, 11.572060]; // green
-// var BBOX = [-72.199376, 11.515926, -72.154220, 11.473979]; // desert
+// var BBOX = [-72.903, 11.810, -72.252, 11.396]; // manaure admin boundary
+
+// var BBOX = [-71.20643772199998,6.424234499000022,-69.72014485099999,7.104161825000062]; // arauca admin boundary
+// var BBOX = [-71.69980876899996,6.526376968000022,-70.86773583299998,7.054700505000028]; // arauquita admin boundary
+// var BBOX = [-72.60807671699996,7.723856582000053,-72.34649040099998,8.431575791000057]; // cucuta admin boundary
+// var BBOX = [-73.07343705199997,8.251246337000055,-72.47112479799995,9.142041082000048]; // tibu admin boundary
+// var BBOX = [-74.30657295399999,4.382138206000036,-74.17129610699999,4.633509322000066]; // soacha admin boundary
+// var BBOX = [-72.52267855299993,7.64295204900003,-72.44465188199996,7.902600765000045]; // villa del rosario admin boundary
+
+var BBOX = [-72.292152, 11.734492, -72.244001, 11.686520]; // small uribia urban area
 
 var region = ee.Geometry.Rectangle(BBOX); // restrict view to bounding box;
 
@@ -25,7 +46,6 @@ Map.centerObject(region, 9);
 
 //+++++++++++ FUNCTIONS ++++++++++++++++++++++++++
 function imports2(img) {
-  //var s2 = img.select(['B2','B3','B4','B8','B12'])
   var s2 = img.select(['B1','B2','B3','B4','B5','B6','B7','B8','B8A','B9','B11','B12'])
                        .divide(10000)
                        .addBands(img.select(['QA60']))
@@ -102,9 +122,7 @@ function cloud_mask(img) {
   return s2.updateMask(mask);
 }
 
-//***********************************************************************************
-// obtain SENTINEL-2 image and display
-//***********************************************************************************
+//+++++++++++ DISPLAY IMAGE ++++++++++++++++++++++++++
 
 //set vizualization parameters
 var vizParams = {'min': 0,'max': [0.2], 'bands':['B4', 'B3', 'B2'] };   //B4, B3, B2
@@ -116,8 +134,13 @@ var S2 = ee.ImageCollection(PRODUCT)
 // .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 10))
  ;
 
+// // View specific images
+// var S2 = ee.ImageCollection.fromImages([
+//   ee.Image('COPERNICUS/S2/20160213T150652_20160213T150654_T19NCH'),
+//   ee.Image('COPERNICUS/S2/20160213T150654_20160213T214357_T19NCH')
+//   ]);
+
 print("S2: ", S2);
-//Map.addLayer(S2, vizParams,'S2 initial image');
 
 //call the cloud masking functions
 var composite = S2
@@ -130,35 +153,16 @@ print("composite: ", composite);
 Map.addLayer(composite.clip(region), {bands: ['B4', 'B3', 'B2'], min: 0, max: 0.2},
             'Sentinel-2 RGB',true);
 
-// // Calculate texture using B8 - NIR
-// // source: http://www.diva-portal.org/smash/get/diva2:1261937/FULLTEXT01.pdf
-// var glcm_input = composite.clip(region).select(['B8'])
-//                     .divide(6.56)
-//                     .multiply(255)
-//                     .toInt();
-// print("glcm_input: ", glcm_input);
-// var glcm = glcm_input.glcmTexture({size: 4});
-// print("glcm: ", glcm);
-// Map.addLayer(glcm, {bands: ['B8_asm']},
-//             'Texture ASM');
-            
-// Export.image.toDrive({
-//   image: composite.select(['B1','B2','B3','B4','B5','B6','B7','B8','B8A','B9','B11','B12']),
-//   // image: glcm,
-//   description: FILENAME,
-//   maxPixels: 150000000,
-//   scale: 10,
-//   region: region
-// });
-
+//+++++++++++ EXPORT ++++++++++++++++++++++++++
+Export.image.toDrive({
 // Export.image.toCloudStorage({
-//   image: composite.select(['B1','B2','B3','B4','B5','B6','B7','B8','B8A','B9','B11','B12']),
-//   // image: glcm,
-//   description: FILENAME,
-//   bucket: 'immap-gee',
-//   maxPixels: 150000000,
-//   scale: 10,
-//   region: region,
-//   crs: 'EPSG:4326'
-// });
+  image: composite.select(['B1','B2','B3','B4','B5','B6','B7','B8','B8A','B9','B11','B12']),
+  description: FILENAME,
+  // bucket: 'immap-gee',
+  maxPixels: 150000000,
+  scale: 10,
+  region: region,
+  crs: 'EPSG:4326'
+});
+
 /******************************************************************************************************/ 
