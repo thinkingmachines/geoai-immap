@@ -1,15 +1,16 @@
-# gee dl
+'''functions for gee dl and deflatecrop, and dicts for gee settings'''
+
 import math
 import ee
 ee.Authenticate()
 ee.Initialize()
 
-# deflate crop
 import subprocess
 from tqdm import tqdm
 import logging
 import os
 from pathlib import Path
+from datetime import datetime, timedelta
 
 # -----
 # gee dl
@@ -146,29 +147,33 @@ def shadowMask(img,cloudMaskType):
     return shadows
 
 # Run the cloud masking code
-def cloud_and_shadow_mask(img) :
-    s2 = imports2(img)
-    s2 = sentinelCloudScore(s2)
-    cloud = ESAcloud(s2)
-    shadow = shadowMask(s2,'cloudScore')
-    mask = cloud.Or(shadow).eq(0)
-
-    return s2.updateMask(mask)
-
-# Run the cloud masking code
-def cloud_mask(img) :
+def cloud_mask(img, mask = True):
     s2 = imports2(img)
     cloud = ESAcloud(s2)
     mask = cloud.eq(0)
     return s2.updateMask(mask)
 
-def sen2median(BBOX, year, FILENAME):
+def sen2median(
+        BBOX, 
+        FILENAME = 'gee_sample',
+        year = 2020, 
+        min_dt = None, 
+        max_dt = None, 
+        cloud_pct = 100,
+        mask = True,
+        PRODUCT = None,
+        verbose = 1,
+    ):
     '''
     Downloads Sentinel Year Median Aggregate Composite for specified bounding box and year.
     For status, check https://code.earthengine.google.com/
     
     Args
         BBOX (list of 4 floats): bounding box coordinates; x,y left, top, right, bottom
+        min_dt, max_dt (str): 'yyyy-mm-dd' min/max date to search images on. If is None, will use year param
+        cloud_pct (int): 0 to 100 filter only to images with Cloud pixel percentage less than cloud_pct
+        mask (bool): whether to mask out clouds
+        PRODUCT (str): can be 'COPERNICUS/S2' or None, whether to force use L1C on all
     
     References
     https://github.com/samsammurphy/cloud-masking-sentinel2
@@ -176,19 +181,22 @@ def sen2median(BBOX, year, FILENAME):
     https://developers.google.com/earth-engine/python_install#syntax
         
     '''
-    
-    # select product
-    print(f'Processing {FILENAME}')
-    if year <= 2017:
-        PRODUCT = 'COPERNICUS/S2' # S2 for L1C <=2017 
-    else:
-        PRODUCT = 'COPERNICUS/S2_SR' # and S2_SR for L2A
 
-    print(f'using {PRODUCT}')
-          
     # set date window
-    date1 = f'{year}-01-01'
-    date2 = f'{year}-12-31'
+    if (min_dt is None) | (max_dt is None):
+        date1 = f'{year}-01-01'
+        date2 = f'{year}-12-31'
+    else:
+        date1 = min_dt
+        date2 = max_dt
+        
+    # select product
+    
+    if PRODUCT is None:
+        if int(date1[0:4]) <= 2017:
+            PRODUCT = 'COPERNICUS/S2' # S2 for L1C <=2017 
+        else:
+            PRODUCT = 'COPERNICUS/S2_SR' # and S2_SR for L2A
 
     # select region
     region = ee.Geometry.Rectangle(BBOX) # restrict view to bounding box
@@ -198,16 +206,30 @@ def sen2median(BBOX, year, FILENAME):
     #obtain the S2 image
     S2 = (ee.ImageCollection(PRODUCT)
      .filterDate(date1, date2)
-     .filterBounds(region))
-    # .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 10))
-
-
-    # # View specific images
-    # S2 = ee.ImageCollection.fromImages([
-    #   ee.Image('COPERNICUS/S2/20160213T150652_20160213T150654_T19NCH'),
-    #   ee.Image('COPERNICUS/S2/20160213T150654_20160213T214357_T19NCH')
-    #   ])
-
+     .filterBounds(region)
+     .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", cloud_pct)))
+    
+    if verbose > 0:
+        print(f'Processing {FILENAME}')
+        print(f'using {PRODUCT}')
+        print('Filtering to images with cloud cover < {}'.format(cloud_pct))
+        if mask:
+            print('with mask')
+        else:
+            print('with no mask')
+    
+    # Run the cloud masking code
+    def cloud_and_shadow_mask(img, mask = mask) :
+        s2 = imports2(img)
+        s2 = sentinelCloudScore(s2)
+        cloud = ESAcloud(s2)
+        shadow = shadowMask(s2,'cloudScore')
+        mask_ = cloud.Or(shadow).eq(0)
+        if mask:
+            return s2.updateMask(mask_)
+        else:
+            return s2
+    
     #call the cloud masking functions
     composite = (S2
       .map(cloud_and_shadow_mask)
@@ -252,6 +274,27 @@ def sen2median(BBOX, year, FILENAME):
 # deflatecrop
 # ----- 
 
+# text = '''
+
+# # set conda env for these commands - took me 3h to figure out
+# eval "$(conda shell.bash hook)"
+# conda activate ee
+
+# gsutil cp gs://immap-gee/gee_area_year.tif output_dir
+
+# gdal_translate -co COMPRESS=DEFLATE -co TILED=YES output_dirgee_area_year.tif output_dirDEFLATED_gee_area_year.tif
+
+# gdalwarp -co "COMPRESS=DEFLATE" -cutline adm_dirarea.shp -srcnodata -dstnodata output_dirDEFLATED_gee_area_year.tif output_diroutput.tif
+
+# gsutil cp output_diroutput.tif bucketoutput.tif
+
+# #rm output_dirgee_area_year.tif
+# #rm output_dirDEFLATED_gee_area_year.tif
+# #rm output_diroutput.tif
+
+# '''
+
+# makes arauca work
 text = '''
 
 # set conda env for these commands - took me 3h to figure out
@@ -262,36 +305,50 @@ gsutil cp gs://immap-gee/gee_area_year.tif output_dir
 
 gdal_translate -co COMPRESS=DEFLATE -co TILED=YES output_dirgee_area_year.tif output_dirDEFLATED_gee_area_year.tif
 
-gdalwarp -co "COMPRESS=DEFLATE" -cutline adm_dirarea.shp -srcnodata -dstnodata output_dirDEFLATED_gee_area_year.tif output_dirCROPPED_output.tif
+gdalwarp -cutline adm_dirarea.shp -srcnodata -dstnodata output_dirDEFLATED_gee_area_year.tif output_dirCROPPED_gee_area_year.tif
 
-gsutil cp output_dirCROPPED_output.tif gs://immap-gee/CROPPED_output.tif
+gdal_translate -co COMPRESS=DEFLATE -co TILED=YES output_dirCROPPED_gee_area_year.tif output_diroutput.tif
 
-rm output_dirgee_area_year.tif
-rm output_dirDEFLATED_gee_area_year.tif
-# rm output_dirCROPPED_gee_area_year.tif
+gsutil cp output_diroutput.tif bucketoutput.tif
+
+#rm output_dirgee_area_year.tif
+#rm output_dirDEFLATED_gee_area_year.tif
+#rm output_dirCROPPED_gee_area_year.tif
+#rm output_diroutput.tif
 
 '''
 
-def deflatecrop1(repl, output_dir, adm_dir, tmp_dir, output = None):
+def deflatecrop1(raw_filename, output_dir, adm_dir, tmp_dir, bucket, clear_local = True):
     '''
     Same as deflatecrop_all but focused on one image at a time
     
     Args
-        output (str): what filename should look like, modified based on if repl is a list
+        output (str): what filename should look like, modified based on if raw_filename is a list
     '''
+    if os.path.exists(tmp_dir + "deflatecrop.sh"):
+        os.remove(tmp_dir + 'deflatecrop.sh')
+        
+    logging.basicConfig(filename = tmp_dir + 'deflatecrop.log', filemode='w',level=logging.DEBUG)
+    logging.info((datetime.now() + timedelta(hours = 8)).strftime('%Y-%m-%d %H:%M:%S'))
+    logging.info('Running for {}'.format(raw_filename))
     
-    logging.info('Running for {}'.format(repl))
-    area = repl.split('_')[1]
-    if output is None:
-        output = repl + '.tif'
+    split_ = (raw_filename
+             .replace('0000000000-0000000000', '')
+             .replace('0000000000-0000009472', '')
+             .split('_'))
+    output = split_[1] + '_' + split_[2] + '.tif'
+    area = raw_filename.split('_')[1]
 
     replacement_txt = (text
-            .replace('gee_area_year', repl)
-            .replace('output.tif', output)
+            .replace('gee_area_year', raw_filename)
             .replace('area.shp', area + '.shp')
             .replace('output_dir', str(Path(output_dir).resolve()) + '/')
             .replace('adm_dir', str(Path(adm_dir).resolve()) + '/')
+            .replace('output.tif', output)
+            .replace('bucket', bucket)
            )
+    if clear_local:
+        replacement_txt = replacement_txt.replace('#rm', 'rm')
 
     f = open(tmp_dir + "deflatecrop.sh", "w")
     f.write(replacement_txt)
@@ -303,44 +360,50 @@ def deflatecrop1(repl, output_dir, adm_dir, tmp_dir, output = None):
     logging.info('Running shell script')
     result = subprocess.run('sh ' + tmp_dir + 'deflatecrop.sh', shell = True, stdout=subprocess.PIPE)
     logging.info(result.stdout)
-    logging.info('Saved to CROPPED_{}'.format(output))
+    logging.info('Saved to {}'.format(bucket + output))
     logging.info('Done!')
         
-def deflatecrop_all(repl, output_dir, adm_dir, tmp_dir):
-    '''
-    Allows support for multi-part images
+# def deflatecrop_all(
+#         raw_filename, output_dir, adm_dir, tmp_dir,
+#         bucket = 'gs://immap-gee/'
+#     ):
+#     '''
+#     Allows support for multi-part images
     
-    Args
-        repl (str): in the format gee_area_year
-        output_dir (str): where to put cropped files in the format /path/to/folder/
-        adm_dir (str): where the admin boundary shape files are in the format /path/to/folder/
-    '''
+#     Args
+#         raw_filename (str): in the format gee_area_year
+#         output_dir (str): where to put cropped files in the format /path/to/folder/
+#         adm_dir (str): where the admin boundary shape files are in the format /path/to/folder/
+#     '''
 
-    if os.path.exists(tmp_dir + "deflatecrop.sh"):
-        os.remove(tmp_dir + 'deflatecrop.sh')
-#     if os.path.exists(tmp_dir + "deflatecrop.log"):
-#         os.remove(tmp_dir + 'deflatecrop.log')
+#     if os.path.exists(tmp_dir + "deflatecrop.sh"):
+#         os.remove(tmp_dir + 'deflatecrop.sh')
         
-    logging.basicConfig(filename = tmp_dir + 'deflatecrop.log', filemode='w',level=logging.DEBUG)
+#     logging.basicConfig(filename = tmp_dir + 'deflatecrop.log', filemode='w',level=logging.DEBUG)
     
-    if type(repl) == list:
-        logging.info('looping')
-        i = 1
-        for p in repl:
-            splt = p.split('_')
-            output = '_'.join(splt[0:2]) + str(i) + '_' + splt[2][0:4]
-            deflatecrop1(
-                repl = p, 
-                output_dir = output_dir, 
-                adm_dir = adm_dir, 
-                tmp_dir = tmp_dir, 
-                output = output,
-            )
-            i+= 1
-    else:
-        deflatecrop1(
-            repl = repl, 
-            output_dir = output_dir, 
-            adm_dir = adm_dir,
-            tmp_dir = tmp_dir,
-        )
+#     if type(raw_filename) == list:
+#         logging.info('looping')
+#         i = 1
+#         for p in raw_filename:
+#             p = p.replace('0000000000-0000000000', '').replace('0000000000-0000009472', '')
+#             splt = p.split('_')
+#             output = splt[1] + '_' + splt[2] + '.tif'
+#             # output = '_'.join(splt[0:2]) + str(i) + '_' + splt[2][0:4] + '.tif'
+#             deflatecrop1(
+#                 raw_filename = p, 
+#                 output_dir = output_dir, 
+#                 adm_dir = adm_dir, 
+#                 tmp_dir = tmp_dir, 
+#                 output = output,
+#             )
+#             i+= 1
+#     else:
+#         deflatecrop1(
+#             raw_filename = raw_filename, 
+#             output_dir = output_dir, 
+#             adm_dir = adm_dir,
+#             tmp_dir = tmp_dir,
+#             output = raw_filename + '.tif',
+#         )
+
+
