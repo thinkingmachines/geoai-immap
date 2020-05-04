@@ -40,7 +40,7 @@ def write_indices(area_dict, area, indices_dir):
     # Iterate over each year
     for image_file in tqdm(image_list, total=len(image_list)):
         year = image_file.split('_')[-1].split('.')[0]
-        
+                
         # Read each band
         src = rio.open(image_file)
         
@@ -156,7 +156,6 @@ def get_preds_windowing(
     model, 
     tmp_dir, 
     best_features, 
-    scaler, 
     output, 
     grid_blocks=5, 
     threshold=0
@@ -173,7 +172,7 @@ def get_preds_windowing(
 
     # Read bands 
 
-    print('Reading {}...'.format(area))
+    #print('Reading {}...'.format(area))
     src_file = area_dict[area]['images'][0]
     windows = make_windows(src_file, grid_blocks = grid_blocks)
 
@@ -188,16 +187,15 @@ def get_preds_windowing(
         # Prediction
 
         X_test = df_test[best_features].fillna(0)
-        all_zeroes = (X_test.iloc[:, :-1].sum(axis=1) == 0 )
-        if scaler != None:
-            X_test = scaler.transform(X_test)
+        all_zeroes = (X_test.iloc[:, :-1].sum(axis=1) == 0)
             
         data = X_test
         features = best_features
 
         # Prettify Tiff
-        #preds = model._predict_proba_lr(data)[:, 1]
-        preds = model.predict_proba(data)[:, 1]
+        data = model.named_steps["scaler"].transform(data)
+        preds = model.named_steps["classifier"]._predict_proba_lr(data)[:, 1]
+        #preds = model.predict_proba(data)[:, 1]
         if threshold > 0:
             preds[(preds < threshold)] = 0
             
@@ -210,7 +208,7 @@ def get_preds_windowing(
         tfm = transform(window, transform = rio.open(src_file).transform)
         save_predictions_window(preds, image_src, output_file, window, tfm)
 
-    print('Saving to {}...'.format(output))
+    #print('Saving to {}...'.format(output))
     stitch(output, tmp_dir)
 
 def stitch(output_file, tmp_dir):
@@ -469,7 +467,7 @@ def read_bands(area_dict, area):
     image_list = area_dict[area]['images']
     
     # Iterate over each year
-    for image_file in tqdm(image_list, total=len(image_list)):
+    for image_file in image_list:
         year = image_file.split('_')[-1].split('.')[0]
         
         # Read each band

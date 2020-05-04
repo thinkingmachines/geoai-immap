@@ -9,7 +9,8 @@ from sklearn.metrics import (
     recall_score,
     precision_score,
     classification_report,
-    cohen_kappa_score
+    cohen_kappa_score,
+    roc_auc_score
 )
 from pandas_ml import ConfusionMatrix
 from sklearn.feature_selection import (
@@ -36,11 +37,13 @@ AREA_CODES = {
     4 : 'Cucuta',
     5 : 'Tibu',
     6 : 'Arauquita', 
+    7 : 'Soacha',
+    8 : 'Bogota'
 }
 VALUE_CODES = {
-    'Informal settlement': 1, 
-    'Formal settlement': 2, 
-    'Unoccupied land': 3
+    1 : 'Informal settlement', 
+    2 : 'Formal settlement', 
+    3 : 'Unoccupied land'
 }
 
 def get_cv_iterator(data):
@@ -85,9 +88,9 @@ def evaluate_model(clf, X_test, y_test, verbose=0):
     recall = recall_score(y_test, y_pred, pos_label=1, average='binary') 
     accuracy = accuracy_score(y_test, y_pred)
     kappa = cohen_kappa_score(y_test, y_pred)
+    auc_score = roc_auc_score(y_test, y_pred)
   
     if verbose > 1:
-        print()
         print(ConfusionMatrix(y_test, y_pred))
         print('\n', classification_report(y_test, y_pred)) 
         print('F1 Score: {:.4f}'.format(f1_score_))
@@ -95,18 +98,30 @@ def evaluate_model(clf, X_test, y_test, verbose=0):
         print('Precision: {:.4f}'.format(precision))
         print('Recall: {:.4f}'.format(recall))
         print('Accuracy: {:.4f}'.format(accuracy))
+        print('ROC AUC: {:.4f}'.format(auc_score))
         print()
 
-    return accuracy, f1_score_, precision, recall, kappa
+    return accuracy, f1_score_, precision, recall, kappa, auc_score
 
-def nested_spatial_cv(clf, X, y, splits, param_grid, search_type='grid', verbose=0, random_state=42):
+def nested_spatial_cv(
+    clf, 
+    X, 
+    y, 
+    splits, 
+    param_grid, 
+    search_type='grid', 
+    feature_selection=True, 
+    verbose=0,
+    random_state=42
+):
     
     scores = {
         'f1_score' : [],
         'kappa' : [],
         'precision' : [],
         'recall' : [],
-        'accuracy' : []
+        'accuracy' : [],
+        'roc_auc' : []
     }
     
     outer_cv, areas = get_cv_iterator(splits)
@@ -120,43 +135,48 @@ def nested_spatial_cv(clf, X, y, splits, param_grid, search_type='grid', verbose
         
         inner_cv, _ = get_cv_iterator(splits_train)
         
-        best_features = rfecv_feature_selection(
-            clf, X_train, y_train, inner_cv, scoring='f1', step=10, verbose=0
-        )
+        if feature_selection is True:
+            best_features = rfecv_feature_selection(
+                clf, X_train, y_train, inner_cv, scoring='f1', step=10, verbose=0
+            )
+            X_train = X_train[best_features]
+            X_test = X_test[best_features]
         
         pipe_clf = Pipeline([
             ('scaler',  MinMaxScaler()),
             ('classifier', clf)
         ])
         
-        if search_type == 'grid':
-            cv = GridSearchCV(
-                estimator=pipe_clf, 
-                param_grid=param_grid,
-                cv=inner_cv, 
-                verbose=verbose, 
-                scoring='f1',
-                n_jobs=-1
-            )
-        elif search_type == 'random':
-            cv = RandomizedSearchCV(
-                estimator=pipe_clf, 
-                param_distributions=param_grid,
-                n_iter=10,
-                cv=inner_cv, 
-                verbose=verbose, 
-                scoring='f1',
-                n_jobs=-1,
-                random_state=random_state
-            )
-        cv.fit(X_train[best_features], y_train)
-        
-        best_estimator = cv.best_estimator_
-        best_estimator.fit(X_train[best_features], y_train)
+        best_estimator = pipe_clf
+        if search_type is not None:
+            if search_type == 'grid':
+                cv = GridSearchCV(
+                    estimator=pipe_clf, 
+                    param_grid=param_grid,
+                    cv=inner_cv, 
+                    verbose=0, 
+                    scoring='f1',
+                    n_jobs=-1
+                )
+            elif search_type == 'random':
+                cv = RandomizedSearchCV(
+                    estimator=pipe_clf, 
+                    param_distributions=param_grid,
+                    n_iter=10,
+                    cv=inner_cv, 
+                    verbose=0, 
+                    scoring='f1',
+                    n_jobs=-1,
+                    random_state=random_state
+                )
+            cv.fit(X_train, y_train)
+            best_estimator = cv.best_estimator_
+            
+        best_estimator.fit(X_train, y_train)
         
         if verbose > 0: print("Test Set: {}".format(area))
-        accuracy, f1_score_, precision, recall, kappa = evaluate_model(
-            best_estimator, X_test[best_features], y_test, verbose=verbose
+        accuracy, f1_score_, precision, recall, kappa, auc_score = evaluate_model(
+            best_estimator, X_test, y_test, verbose=verbose
         )
         
         # Save results
@@ -165,6 +185,7 @@ def nested_spatial_cv(clf, X, y, splits, param_grid, search_type='grid', verbose
         scores['precision'].append(precision)
         scores['recall'].append(recall)
         scores['accuracy'].append(accuracy)
+        scores['roc_auc'].append(auc_score)
     
     if verbose > 0:
         print()
@@ -173,6 +194,7 @@ def nested_spatial_cv(clf, X, y, splits, param_grid, search_type='grid', verbose
         print('Mean Precision: {:.4f}'.format(np.mean(scores['precision'])))
         print('Mean Recall: {:.4f}'.format(np.mean(scores['recall'])))
         print('Mean Accuracy: {:.4f}'.format(np.mean(scores['accuracy'])))
+        print('Mean ROC AUC: {:.4f}'.format(np.mean(scores['roc_auc'])))
         print()
     
     return scores
@@ -184,7 +206,8 @@ def spatial_cv(clf, X, y, splits, verbose=0):
         'kappa' : [],
         'precision' : [],
         'recall' : [],
-        'accuracy' : []
+        'accuracy' : [],
+        'roc_auc' : []
     }
     
     cv, areas = get_cv_iterator(splits)
@@ -203,7 +226,7 @@ def spatial_cv(clf, X, y, splits, verbose=0):
         
         # Evaluate model
         if verbose > 0: print('\nTest Set: {}'.format(area))
-        accuracy, f1_score_, precision, recall, kappa = evaluate_model(
+        accuracy, f1_score_, precision, recall, kappa, auc_score = evaluate_model(
             pipe_clf, X_test, y_test, verbose=verbose
         )
         
@@ -213,6 +236,7 @@ def spatial_cv(clf, X, y, splits, verbose=0):
         scores['precision'].append(precision)
         scores['recall'].append(recall)
         scores['accuracy'].append(accuracy)
+        scores['roc_auc'].append(auc_score)
         
     if verbose > 0:
         print()
@@ -221,35 +245,55 @@ def spatial_cv(clf, X, y, splits, verbose=0):
         print('Mean Precision: {:.4f}'.format(np.mean(scores['precision'])))
         print('Mean Recall: {:.4f}'.format(np.mean(scores['recall'])))
         print('Mean Accuracy: {:.4f}'.format(np.mean(scores['accuracy'])))
+        print('Mean ROC AUC: {:.4f}'.format(np.mean(scores['roc_auc'])))
         print()
     
     return scores
 
-def resample(data, num_neg_samples, neg_dist, random_state):    
-    data_area = []
+def resample(data, num_neg_samples, random_state):    
+
+    neg_dist = {
+        'Formal settlement': 0.4, 
+        'Unoccupied land': 0.6
+    }
     
+    data_area = []
     for area in data['area'].unique():
         neg_samples = data[
             (data['area'] == area) 
             & (data['target'] != 1)
         ]
-        for value in neg_dist:
-            samples = neg_samples[
-                data['target'] == VALUE_CODES[value]
-            ]
+        
+        # Formal Settlements
+        formal_samples = neg_samples[
+            data['target'] == 2
+        ]
             
-            n_samples = int(
-                num_neg_samples*neg_dist[value]
-            )
-            if len(samples) < n_samples:
-                n_samples = len(samples)
-                
-            samples = samples.sample(
-                n_samples, 
-                replace=False, 
-                random_state=random_state
-            )
-            data_area.append(samples)
+        n_formal_samples = int(
+            num_neg_samples*neg_dist[VALUE_CODES[2]]
+        )
+        if len(formal_samples) < n_formal_samples:
+            n_formal_samples = len(formal_samples)
+            
+        formal_samples = formal_samples.sample(
+            n_formal_samples, 
+            replace=False, 
+            random_state=random_state
+        )
+        data_area.append(formal_samples)
+        
+        # Unoccupied Land
+        land_samples = neg_samples[
+            data['target'] == 3
+        ]
+        
+        n_land_samples = num_neg_samples - n_formal_samples
+        land_samples = land_samples.sample(
+            n_land_samples, 
+            replace=False, 
+            random_state=random_state
+        )
+        data_area.append(land_samples)
 
     pos_samples = data[data['target'] == 1]
     data_area.append(pos_samples)
