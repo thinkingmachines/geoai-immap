@@ -9,7 +9,8 @@ from sklearn.metrics import (
     recall_score,
     precision_score,
     classification_report,
-    cohen_kappa_score
+    cohen_kappa_score,
+    roc_auc_score
 )
 from pandas_ml import ConfusionMatrix
 from sklearn.feature_selection import (
@@ -36,6 +37,8 @@ AREA_CODES = {
     4 : 'Cucuta',
     5 : 'Tibu',
     6 : 'Arauquita', 
+    7 : 'Soacha',
+    8 : 'Bogota'
 }
 VALUE_CODES = {
     1 : 'Informal settlement', 
@@ -85,6 +88,7 @@ def evaluate_model(clf, X_test, y_test, verbose=0):
     recall = recall_score(y_test, y_pred, pos_label=1, average='binary') 
     accuracy = accuracy_score(y_test, y_pred)
     kappa = cohen_kappa_score(y_test, y_pred)
+    auc_score = roc_auc_score(y_test, y_pred)
   
     if verbose > 1:
         print(ConfusionMatrix(y_test, y_pred))
@@ -94,9 +98,10 @@ def evaluate_model(clf, X_test, y_test, verbose=0):
         print('Precision: {:.4f}'.format(precision))
         print('Recall: {:.4f}'.format(recall))
         print('Accuracy: {:.4f}'.format(accuracy))
+        print('ROC AUC: {:.4f}'.format(auc_score))
         print()
 
-    return accuracy, f1_score_, precision, recall, kappa
+    return accuracy, f1_score_, precision, recall, kappa, auc_score
 
 def nested_spatial_cv(
     clf, 
@@ -106,8 +111,7 @@ def nested_spatial_cv(
     param_grid, 
     search_type='grid', 
     feature_selection=True, 
-    verbose=0, 
-    crf=False,
+    verbose=0,
     random_state=42
 ):
     
@@ -116,7 +120,8 @@ def nested_spatial_cv(
         'kappa' : [],
         'precision' : [],
         'recall' : [],
-        'accuracy' : []
+        'accuracy' : [],
+        'roc_auc' : []
     }
     
     outer_cv, areas = get_cv_iterator(splits)
@@ -170,7 +175,7 @@ def nested_spatial_cv(
         best_estimator.fit(X_train, y_train)
         
         if verbose > 0: print("Test Set: {}".format(area))
-        accuracy, f1_score_, precision, recall, kappa = evaluate_model(
+        accuracy, f1_score_, precision, recall, kappa, auc_score = evaluate_model(
             best_estimator, X_test, y_test, verbose=verbose
         )
         
@@ -180,6 +185,7 @@ def nested_spatial_cv(
         scores['precision'].append(precision)
         scores['recall'].append(recall)
         scores['accuracy'].append(accuracy)
+        scores['roc_auc'].append(auc_score)
     
     if verbose > 0:
         print()
@@ -188,6 +194,7 @@ def nested_spatial_cv(
         print('Mean Precision: {:.4f}'.format(np.mean(scores['precision'])))
         print('Mean Recall: {:.4f}'.format(np.mean(scores['recall'])))
         print('Mean Accuracy: {:.4f}'.format(np.mean(scores['accuracy'])))
+        print('Mean ROC AUC: {:.4f}'.format(np.mean(scores['roc_auc'])))
         print()
     
     return scores
@@ -199,7 +206,8 @@ def spatial_cv(clf, X, y, splits, verbose=0):
         'kappa' : [],
         'precision' : [],
         'recall' : [],
-        'accuracy' : []
+        'accuracy' : [],
+        'roc_auc' : []
     }
     
     cv, areas = get_cv_iterator(splits)
@@ -218,7 +226,7 @@ def spatial_cv(clf, X, y, splits, verbose=0):
         
         # Evaluate model
         if verbose > 0: print('\nTest Set: {}'.format(area))
-        accuracy, f1_score_, precision, recall, kappa = evaluate_model(
+        accuracy, f1_score_, precision, recall, kappa, auc_score = evaluate_model(
             pipe_clf, X_test, y_test, verbose=verbose
         )
         
@@ -228,6 +236,7 @@ def spatial_cv(clf, X, y, splits, verbose=0):
         scores['precision'].append(precision)
         scores['recall'].append(recall)
         scores['accuracy'].append(accuracy)
+        scores['roc_auc'].append(auc_score)
         
     if verbose > 0:
         print()
@@ -236,13 +245,19 @@ def spatial_cv(clf, X, y, splits, verbose=0):
         print('Mean Precision: {:.4f}'.format(np.mean(scores['precision'])))
         print('Mean Recall: {:.4f}'.format(np.mean(scores['recall'])))
         print('Mean Accuracy: {:.4f}'.format(np.mean(scores['accuracy'])))
+        print('Mean ROC AUC: {:.4f}'.format(np.mean(scores['roc_auc'])))
         print()
     
     return scores
 
-def resample(data, num_neg_samples, neg_dist, random_state):    
-    data_area = []
+def resample(data, num_neg_samples, random_state):    
+
+    neg_dist = {
+        'Formal settlement': 0.4, 
+        'Unoccupied land': 0.6
+    }
     
+    data_area = []
     for area in data['area'].unique():
         neg_samples = data[
             (data['area'] == area) 
