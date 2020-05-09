@@ -19,7 +19,7 @@ import rasterio.mask
 from rasterio.plot import show
 from fiona.crs import to_string
 
-la_guajira = ['maicao', 'uribia', 'riohacha']
+GRID_ID = 1
 
 def write_indices(area_dict, area, indices_dir):
     """
@@ -326,12 +326,7 @@ def read_bands_window(area_dict, area, window):
         data.append(subdata)
         del subdata
     
-    data = pd.concat(data, axis=1)
-    if area in la_guajira:
-        data['la_guajira'] = 1
-    else:
-        data['la_guajira'] = 0
-    
+    data = pd.concat(data, axis=1)    
     return data
 
 def make_windows(image_file, grid_blocks = 5):
@@ -500,10 +495,6 @@ def read_bands(area_dict, area):
         del subdata
     
     data = pd.concat(data, axis=1)
-    if area in la_guajira:
-        data['la_guajira'] = 1
-    else:
-        data['la_guajira'] = 0
     
     return data
 
@@ -530,19 +521,23 @@ def generate_training_data(area_dict):
         print('Reading {}...'.format(area))
 
         # Read positive target mask
-        pos_mask = rio.open(area_dict[area]['pos_mask_tiff'])
-        pos_mask = pos_mask.read(1).ravel()
+        pos = rio.open(area_dict[area]['pos_mask_tiff'])
+        pos_mask = pos.read(1).ravel()
+        pos_grid = pos.read(2).ravel()
 
         # Read negative mask
-        neg_mask = rio.open(area_dict[area]['neg_mask_tiff'])
-        neg_mask = neg_mask.read(1).ravel()
+        neg = rio.open(area_dict[area]['neg_mask_tiff'])
+        neg_mask = neg.read(1).ravel()
+        neg_grid = neg.read(2).ravel()
  
         # Get sum of postive and negative mask
         mask = pos_mask + neg_mask
+        grid = pos_grid + neg_grid
 
         # Read bands
         subdata = read_bands(area_dict, area)
         subdata['target'] = mask
+        subdata['uid'] = grid
         subdata['area'] = idx
         area_code[area] = idx
 
@@ -608,6 +603,8 @@ def explode(gdf):
 
     gs = gdf.explode()
     gdf2 = gs.reset_index().rename(columns={0: "geometry"})
+    if 'class' in gdf2.columns:
+        gdf2 = gdf2.drop("class", axis=1)
     gdf_out = gdf2.merge(
         gdf.drop("geometry", axis=1), left_on="level_0", right_index=True
     )
@@ -629,52 +626,59 @@ def generate_mask(tiff_file, shape_file, output_file, plot=False):
     Returns:
         image (np.array) : A binary mask as a numpy array 
     """
-
+    global GRID_ID
+    
     src = rio.open(tiff_file)
-    gdf = gpd.read_file(shape_file).dropna()
+    raw = gpd.read_file(shape_file).dropna()
+    gdf = explode(raw)
 
     values = {}
         
     if "class" in gdf.columns:
         unique_classes = sorted(gdf["class"].unique())
         values = {value: x + 2 for x, value in enumerate(unique_classes)}
-        values["informal settlement"] = 1
+        values["Informal settlement"] = 1
     
     value = 1.0
-    shapes = []
+    masks, grids = [], []
     for index, (idx, x) in enumerate(gdf.iterrows()):
-        band = 255 / ((idx / gdf.shape[0]) + 1)
-        if "class" in x:
-            value = values[x["class"]]
+        if "class" in x: value = values[x["class"]]
         gdf_json = json.loads(gpd.GeoDataFrame(x).T.to_json())
         feature = [gdf_json["features"][0]["geometry"]][0]
-        shapes.append((feature, value))
+        masks.append((feature, value))
+        grids.append((feature, GRID_ID))
+        GRID_ID += 1
     
-    image = rio.features.rasterize(
-        ((g, v) for (g, v) in shapes), out_shape=src.shape, transform=src.transform
+    masks = rio.features.rasterize(
+        ((g, v) for (g, v) in masks), out_shape=src.shape, transform=src.transform
+    ).astype(rio.uint16)
+    
+    grids = rio.features.rasterize(
+        ((g, v) for (g, v) in grids), out_shape=src.shape, transform=src.transform
     ).astype(rio.uint16)
 
     out_meta = src.meta.copy()
-    out_meta["dtype"] = rio.uint16
-    out_meta["count"] = 1
+    out_meta["count"] = 2
     out_meta["nodata"] = 0
+    out_meta["dtype"] = rio.uint16
     out_meta["compress"] = "deflate"
 
     with rio.open(output_file, "w", **out_meta) as dst:
-        dst.write(image, indexes=1)
+        dst.write(masks, indexes=1)
+        dst.write(grids, indexes=2)
     
     if plot:
         f, ax = plt.subplots(1, 3, figsize=(15, 15))
         gdf.plot(ax=ax[0])
         rio.plot.show(src, ax=ax[1], adjust=None)
-        rio.plot.show(image, ax=ax[2], adjust=None)
+        rio.plot.show(masks, ax=ax[2], adjust=None)
 
         ax[0].set_title("Vector File")
         ax[1].set_title("TIFF")
         ax[2].set_title("Masked")
         plt.show()
         
-    return image, values
+    return masks, grids, values
 
 def get_pos_raster_mask(area_dict, plot=False):
     """
@@ -733,7 +737,7 @@ def get_neg_raster_mask(area_dict, plot=False):
             gdf = gpd.read_file(shape_file)
 
             # Generate masks
-            _, target_dict = generate_mask(
+            _, _, target_dict = generate_mask(
                 tiff_file=tiff_file,
                 shape_file=shape_file,
                 output_file=target_file,

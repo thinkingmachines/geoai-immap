@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+from tqdm import tqdm
 
 from sklearn.metrics import (
     f1_score,
@@ -10,7 +11,8 @@ from sklearn.metrics import (
     precision_score,
     classification_report,
     cohen_kappa_score,
-    roc_auc_score
+    roc_auc_score,
+    precision_recall_curve
 )
 from pandas_ml import ConfusionMatrix
 from sklearn.feature_selection import (
@@ -75,33 +77,6 @@ def rfecv_feature_selection(clf, X, y, cv, scoring='f1', step=10, verbose=0):
     rfe_features = X.loc[:, rfe_support].columns.tolist()
     
     return rfe_features
-
-def evaluate_model(clf, X_test, y_test, verbose=0):
-    
-    # Predict on test set
-    y_pred = clf.predict(X_test)
-    
-    # Calculate metrics
-    y_test, y_pred = list(y_test), list(y_pred)
-    f1_score_ = f1_score(y_test, y_pred, pos_label=1, average='binary')  
-    precision = precision_score(y_test, y_pred, pos_label=1, average='binary') 
-    recall = recall_score(y_test, y_pred, pos_label=1, average='binary') 
-    accuracy = accuracy_score(y_test, y_pred)
-    kappa = cohen_kappa_score(y_test, y_pred)
-    auc_score = roc_auc_score(y_test, y_pred)
-  
-    if verbose > 1:
-        print(ConfusionMatrix(y_test, y_pred))
-        print('\n', classification_report(y_test, y_pred)) 
-        print('F1 Score: {:.4f}'.format(f1_score_))
-        print('Kappa Statistics: {:.4f}'.format(kappa))
-        print('Precision: {:.4f}'.format(precision))
-        print('Recall: {:.4f}'.format(recall))
-        print('Accuracy: {:.4f}'.format(accuracy))
-        print('ROC AUC: {:.4f}'.format(auc_score))
-        print()
-
-    return accuracy, f1_score_, precision, recall, kappa, auc_score
 
 def nested_spatial_cv(
     clf, 
@@ -201,17 +176,9 @@ def nested_spatial_cv(
 
 def spatial_cv(clf, X, y, splits, verbose=0):
     
-    scores = {
-        'f1_score' : [],
-        'kappa' : [],
-        'precision' : [],
-        'recall' : [],
-        'accuracy' : [],
-        'roc_auc' : []
-    }
-    
+    out_of_fold_test, out_of_fold_preds = [], []
     cv, areas = get_cv_iterator(splits)
-    for (train_indices, test_indices), area in zip(cv, areas):
+    for (train_indices, test_indices), area in tqdm(zip(cv, areas), total=len(areas)):
         
         # Split into train and test splits
         X_train, X_test = X.loc[train_indices], X.loc[test_indices]
@@ -223,32 +190,16 @@ def spatial_cv(clf, X, y, splits, verbose=0):
             ('classifier', clf)
         ])
         pipe_clf.fit(X_train, y_train)
+            
+        # Predict on test set
+        y_pred = pipe_clf.predict_proba(X_test)[:, 1]
+        y_test, y_pred = list(y_test), list(y_pred)
         
-        # Evaluate model
-        if verbose > 0: print('\nTest Set: {}'.format(area))
-        accuracy, f1_score_, precision, recall, kappa, auc_score = evaluate_model(
-            pipe_clf, X_test, y_test, verbose=verbose
-        )
+        # Concatenate all out-of-fold predictions
+        out_of_fold_test += y_test
+        out_of_fold_preds += y_pred
         
-        # Save results
-        scores['f1_score'].append(f1_score_)
-        scores['kappa'].append(kappa)
-        scores['precision'].append(precision)
-        scores['recall'].append(recall)
-        scores['accuracy'].append(accuracy)
-        scores['roc_auc'].append(auc_score)
-        
-    if verbose > 0:
-        print()
-        print('Mean F1 Score: {:.4f}'.format(np.mean(scores['f1_score'])))
-        print('Mean Kappa statistic: {:.4f}'.format(np.mean(scores['kappa'])))
-        print('Mean Precision: {:.4f}'.format(np.mean(scores['precision'])))
-        print('Mean Recall: {:.4f}'.format(np.mean(scores['recall'])))
-        print('Mean Accuracy: {:.4f}'.format(np.mean(scores['accuracy'])))
-        print('Mean ROC AUC: {:.4f}'.format(np.mean(scores['roc_auc'])))
-        print()
-    
-    return scores
+    return out_of_fold_test, out_of_fold_preds
 
 def resample(data, num_neg_samples, random_state):    
 
