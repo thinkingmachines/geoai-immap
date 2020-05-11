@@ -30,6 +30,9 @@ from sklearn.model_selection import (
 )
 from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import Pipeline
+from scipy import stats
+
+from matplotlib.lines import Line2D
 
 AREA_CODES = {
     0 : 'Maicao', 
@@ -47,6 +50,81 @@ VALUE_CODES = {
     2 : 'Formal settlement', 
     3 : 'Unoccupied land'
 }
+
+def plot_precision_recall(results, classifiers=None):
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots()
+    ax2 = ax.twinx()
+    
+    linestyles = ['solid', 'dashed', 'dashdot', 'dotted'][:len(results)]
+    for result, linestyle in zip(results, linestyles):
+        proportion = (result.index+1)/len(result)
+        ax.plot(proportion, result['recall'], linestyle=linestyle, color='#F3A258')
+        ax.plot(proportion, result['precision'], linestyle=linestyle, color='#5268B4')
+
+    ax.tick_params(labelright=True)
+    ax2.tick_params(labelright=False)
+    ax2.grid(False)
+
+    ax.set_ylabel('Precision', color='#5268B4')
+    h = ax2.set_ylabel('Recall', color='#F3A258', labelpad=45)
+    h.set_rotation(-90)
+    
+    if classifiers != None:
+        legend_elements = [
+            Line2D([0], [0], color='black', linestyle=linestyle, label=classifier)
+            for linestyle, classifier in zip(linestyles, classifiers)
+        ]
+        ax.legend(handles=legend_elements, bbox_to_anchor=(1.6, 1))
+
+    ax.set_xlabel('Proportion of Grids')
+    plt.title('Precision-Recall at X Proportion of Grids')
+    plt.show()
+
+def calculate_precision(y_test):
+    precision = sum(y_test)/len(y_test)
+    return precision
+
+def calculate_recall(y_test, total_pos):
+    recall = sum(y_test)/total_pos
+    return recall
+
+def calculate_precision_recall(results):
+    results = results.sort_values('y_pred', ascending=False)
+    results = results.reset_index(drop=True)
+
+    total_pos = sum(results['y_test'])
+    results['precision'] = results['y_test'].expanding().apply(calculate_precision) 
+    results['recall'] = results['y_test'].expanding().apply(lambda x: calculate_recall(x, total_pos))
+        
+    return results
+
+def get_grid_level_results(results):
+    def get_mode(x):
+        return(stats.mode(x)[0])
+
+    def get_top_percentile(x):
+        percentile = 0.10
+        top_n = int(percentile*len(x))
+        x = sorted(x, reverse=True)[:top_n]
+        return(np.mean(x))
+    
+    # Remove grids with less than 10 pixels
+    grids = list(results[results['y_test'] == 1]['grid_id'].unique())
+    counts = results[results['y_test'] != 1]['grid_id'].value_counts() 
+    grids.extend(list(counts[counts > 10].index))
+    results = results[results['grid_id'].isin(grids)]
+    
+    results_grid = results.groupby('grid_id')[['grid_id', 'y_pred', 'y_test']].agg({
+        'grid_id': get_mode,
+        'y_pred': get_top_percentile,
+        'y_test': get_mode
+    })
+    
+    results_grid = calculate_precision_recall(results_grid)
+    plot_precision_recall([results_grid])
+    
+    return results_grid
 
 def get_cv_iterator(data):
     
@@ -83,30 +161,28 @@ def nested_spatial_cv(
     X, 
     y, 
     splits, 
+    grids,
     param_grid, 
     search_type='grid', 
     feature_selection=True, 
     verbose=0,
     random_state=42
 ):
-    
-    scores = {
-        'f1_score' : [],
-        'kappa' : [],
-        'precision' : [],
-        'recall' : [],
-        'accuracy' : [],
-        'roc_auc' : []
+    results = {
+        'grid_id': [],
+        'y_pred': [],
+        'y_test': []
     }
-    
+        
     outer_cv, areas = get_cv_iterator(splits)
-    for (train_indices, test_indices), area in zip(outer_cv, areas):
+    for (train_indices, test_indices), area in tqdm(zip(outer_cv, areas), total=len(areas)):
         
         splits_train = splits.loc[train_indices].reset_index(drop=True)    
         X_train = X.loc[train_indices].reset_index(drop=True)
         X_test = X.loc[test_indices].reset_index(drop=True)
         y_train = y.loc[train_indices].reset_index(drop=True)
         y_test = y.loc[test_indices].reset_index(drop=True)
+        y_grids = grids.loc[test_indices].values
         
         inner_cv, _ = get_cv_iterator(splits_train)
         
@@ -137,7 +213,7 @@ def nested_spatial_cv(
                 cv = RandomizedSearchCV(
                     estimator=pipe_clf, 
                     param_distributions=param_grid,
-                    n_iter=10,
+                    n_iter=5,
                     cv=inner_cv, 
                     verbose=0, 
                     scoring='f1',
@@ -149,40 +225,37 @@ def nested_spatial_cv(
             
         best_estimator.fit(X_train, y_train)
         
-        if verbose > 0: print("Test Set: {}".format(area))
-        accuracy, f1_score_, precision, recall, kappa, auc_score = evaluate_model(
-            best_estimator, X_test, y_test, verbose=verbose
-        )
+        try:
+            y_pred = best_estimator.predict_proba(X_test)[:, 1]
+        except:
+            d = best_estimator.decision_function(X_test)
+            y_pred = np.exp(d) / np.sum(np.exp(d))
+            
+        y_test, y_pred = list(y_test), list(y_pred)
         
-        # Save results
-        scores['f1_score'].append(f1_score_)
-        scores['kappa'].append(kappa)
-        scores['precision'].append(precision)
-        scores['recall'].append(recall)
-        scores['accuracy'].append(accuracy)
-        scores['roc_auc'].append(auc_score)
-    
-    if verbose > 0:
-        print()
-        print('Mean F1 Score: {:.4f}'.format(np.mean(scores['f1_score'])))
-        print('Mean Kappa statistic: {:.4f}'.format(np.mean(scores['kappa'])))
-        print('Mean Precision: {:.4f}'.format(np.mean(scores['precision'])))
-        print('Mean Recall: {:.4f}'.format(np.mean(scores['recall'])))
-        print('Mean Accuracy: {:.4f}'.format(np.mean(scores['accuracy'])))
-        print('Mean ROC AUC: {:.4f}'.format(np.mean(scores['roc_auc'])))
-        print()
-    
-    return scores
+        # Concatenate all out-of-fold predictions
+        results['grid_id'].extend(y_grids)
+        results['y_test'].extend(y_test)
+        results['y_pred'].extend(y_pred)
+            
+    results = pd.DataFrame(results)
+    return results
 
-def spatial_cv(clf, X, y, splits, verbose=0):
+def spatial_cv(clf, X, y, splits, grids, verbose=0):
     
-    out_of_fold_test, out_of_fold_preds = [], []
+    results = {
+        'grid_id': [],
+        'y_pred': [],
+        'y_test': []
+    }
+    
     cv, areas = get_cv_iterator(splits)
     for (train_indices, test_indices), area in tqdm(zip(cv, areas), total=len(areas)):
         
         # Split into train and test splits
         X_train, X_test = X.loc[train_indices], X.loc[test_indices]
         y_train, y_test = y.loc[train_indices], y.loc[test_indices]
+        y_grids = grids.loc[test_indices].values
         
         # Fit classifier to training set
         pipe_clf = Pipeline([
@@ -196,10 +269,12 @@ def spatial_cv(clf, X, y, splits, verbose=0):
         y_test, y_pred = list(y_test), list(y_pred)
         
         # Concatenate all out-of-fold predictions
-        out_of_fold_test += y_test
-        out_of_fold_preds += y_pred
-        
-    return out_of_fold_test, out_of_fold_preds
+        results['grid_id'].extend(y_grids)
+        results['y_test'].extend(y_test)
+        results['y_pred'].extend(y_pred)
+    
+    results = pd.DataFrame(results)
+    return results
 
 def resample(data, num_neg_samples, random_state):    
 
