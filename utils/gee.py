@@ -1,4 +1,4 @@
-'''functions for gee dl and deflatecrop, and dicts for gee settings'''
+'''Functions for gee dl and deflatecrop'''
 
 import math
 import ee
@@ -274,28 +274,29 @@ def sen2median(
 # deflatecrop
 # ----- 
 
-# text = '''
+text1 = '''
 
-# # set conda env for these commands - took me 3h to figure out
-# eval "$(conda shell.bash hook)"
-# conda activate ee
+# set conda env for these commands - took me 3h to figure out
+eval "$(conda shell.bash hook)"
+conda activate ee
 
-# gsutil cp gs://immap-gee/gee_area_year.tif output_dir
+gsutil cp gs://immap-gee/gee_area_year.tif output_dir
 
-# gdal_translate -co COMPRESS=DEFLATE -co TILED=YES output_dirgee_area_year.tif output_dirDEFLATED_gee_area_year.tif
+gdal_translate -co COMPRESS=DEFLATE -co TILED=YES output_dirgee_area_year.tif output_dirDEFLATED_gee_area_year.tif
 
-# gdalwarp -co "COMPRESS=DEFLATE" -cutline adm_dirarea.shp -srcnodata -dstnodata output_dirDEFLATED_gee_area_year.tif output_diroutput.tif
+gdalwarp -co "COMPRESS=DEFLATE" -cutline adm_dirarea.shp -srcnodata -dstnodata output_dirDEFLATED_gee_area_year.tif output_diroutput.tif
 
-# gsutil cp output_diroutput.tif bucketoutput.tif
+gsutil cp output_diroutput.tif bucketoutput.tif
 
-# #rm output_dirgee_area_year.tif
-# #rm output_dirDEFLATED_gee_area_year.tif
-# #rm output_diroutput.tif
+#rm output_dirgee_area_year.tif
+#rm output_dirDEFLATED_gee_area_year.tif
+#rm output_diroutput.tif
 
-# '''
+'''
 
-# makes arauca work
-text = '''
+# decoupled cropping and deflating
+# makes arauca work - if applied to other areas, cuts out a part of the image in the final output
+text2 = '''
 
 # set conda env for these commands - took me 3h to figure out
 eval "$(conda shell.bash hook)"
@@ -338,6 +339,12 @@ def deflatecrop1(raw_filename, output_dir, adm_dir, tmp_dir, bucket, clear_local
              .split('_'))
     output = split_[1] + '_' + split_[2] + '.tif'
     area = raw_filename.split('_')[1]
+    
+    # special processing for arauca
+    if area == 'arauca':
+        text = text2
+    else:
+        text = text1
 
     replacement_txt = (text
             .replace('gee_area_year', raw_filename)
@@ -356,54 +363,11 @@ def deflatecrop1(raw_filename, output_dir, adm_dir, tmp_dir, bucket, clear_local
     logging.info('Saving the following shell script in ' + tmp_dir + "deflatecrop.sh")
     logging.info(replacement_txt)
 
-    
+    assert os.path.exists(adm_dir + area + ".shp")
     logging.info('Running shell script')
     result = subprocess.run('sh ' + tmp_dir + 'deflatecrop.sh', shell = True, stdout=subprocess.PIPE)
     logging.info(result.stdout)
     logging.info('Saved to {}'.format(bucket + output))
     logging.info('Done!')
-        
-# def deflatecrop_all(
-#         raw_filename, output_dir, adm_dir, tmp_dir,
-#         bucket = 'gs://immap-gee/'
-#     ):
-#     '''
-#     Allows support for multi-part images
-    
-#     Args
-#         raw_filename (str): in the format gee_area_year
-#         output_dir (str): where to put cropped files in the format /path/to/folder/
-#         adm_dir (str): where the admin boundary shape files are in the format /path/to/folder/
-#     '''
-
-#     if os.path.exists(tmp_dir + "deflatecrop.sh"):
-#         os.remove(tmp_dir + 'deflatecrop.sh')
-        
-#     logging.basicConfig(filename = tmp_dir + 'deflatecrop.log', filemode='w',level=logging.DEBUG)
-    
-#     if type(raw_filename) == list:
-#         logging.info('looping')
-#         i = 1
-#         for p in raw_filename:
-#             p = p.replace('0000000000-0000000000', '').replace('0000000000-0000009472', '')
-#             splt = p.split('_')
-#             output = splt[1] + '_' + splt[2] + '.tif'
-#             # output = '_'.join(splt[0:2]) + str(i) + '_' + splt[2][0:4] + '.tif'
-#             deflatecrop1(
-#                 raw_filename = p, 
-#                 output_dir = output_dir, 
-#                 adm_dir = adm_dir, 
-#                 tmp_dir = tmp_dir, 
-#                 output = output,
-#             )
-#             i+= 1
-#     else:
-#         deflatecrop1(
-#             raw_filename = raw_filename, 
-#             output_dir = output_dir, 
-#             adm_dir = adm_dir,
-#             tmp_dir = tmp_dir,
-#             output = raw_filename + '.tif',
-#         )
 
 
