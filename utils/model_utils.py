@@ -51,12 +51,85 @@ VALUE_CODES = {
     3 : 'Unoccupied land'
 }
 
-def plot_precision_recall(results, classifiers=None):
+def evaluate_per_area(results):
+    areas = results[0]['areas'].unique()
+    
+    output = {
+        area : {
+            'labels' : [],
+            'pixel_preds' : [],
+            'grid_preds' : [],
+            'pixel_metrics' : [],
+            'grid_metrics' : []
+        }
+        for area in areas
+    }
+    
+    for area in areas:
+        for results in results:
+            subdata = result[result['area'] == area]
+
+            pixel_preds = subdata['y_pred']
+            grid_preds = get_grid_level_results(pixel_preds)
+
+            pixel_metrics = calculate_precision_recall(pixel_preds)
+            grid_metrics = calculate_precision_recall(grid_preds)
+
+            output[area]['labels'].append(label)
+            output[area]['pixel_preds'].append(pixel_preds)
+            output[area]['grid_preds'].append(grid_preds)
+            output[area]['pixel_metrics'].append(pixel_metrics)
+            output[area]['grid_metrics'].append(grid_metrics)
+            
+    return output
+
+def evaluate_model(models, labels, X, y, splits, grids, verbose=2):
+    output = {
+        'labels' : [],
+        'pixel_preds' : [],
+        'grid_preds' : [],
+        'pixel_metrics' : [],
+        'grid_metrics' : []
+    }
+    
+    for model, label in tqdm(zip(models, labels), total=len(models)):
+        pixel_preds = spatial_cv(model, X, y, splits=splits, grids=grids, verbose=2)
+        grid_preds = get_grid_level_results(pixel_preds)
+
+        pixel_metrics = calculate_precision_recall(pixel_preds)
+        grid_metrics = calculate_precision_recall(grid_preds)
+        
+        output['labels'].append(label)
+        output['pixel_preds'].append(pixel_preds)
+        output['grid_preds'].append(grid_preds)
+        output['pixel_metrics'].append(pixel_metrics)
+        output['grid_metrics'].append(grid_metrics)
+        
+    return output
+    
+def plot_precision_recall(results, labels=None, level='grid'):
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots()
     ax2 = ax.twinx()
     
-    linestyles = ['solid', 'dashed', 'dashdot', 'dotted'][:len(results)]
+    linestyles_named = ['solid', 'dashed', 'dashdot', 'dotted']
+    linestyle_tuple = [
+     ('loosely dotted',        (0, (1, 10))),
+     ('dotted',                (0, (1, 1))),
+     ('densely dotted',        (0, (1, 1))),
+     ('loosely dashed',        (0, (5, 10))),
+     ('dashed',                (0, (5, 5))),
+     ('densely dashed',        (0, (5, 1))),
+     ('loosely dashdotted',    (0, (3, 10, 1, 10))),
+     ('dashdotted',            (0, (3, 5, 1, 5))),
+     ('densely dashdotted',    (0, (3, 1, 1, 1))),
+     ('dashdotdotted',         (0, (3, 5, 1, 5, 1, 5))),
+     ('loosely dashdotdotted', (0, (3, 10, 1, 10, 1, 10))),
+     ('densely dashdotdotted', (0, (3, 1, 1, 1, 1, 1)))]
+    
+    linestyles = linestyles_named + [x[1] for x in linestyle_tuple]
+    linestyles = linestyles[:len(results)]
+    
     for result, linestyle in zip(results, linestyles):
         proportion = (result.index+1)/len(result)
         ax.plot(proportion, result['recall'], linestyle=linestyle, color='#F3A258')
@@ -70,15 +143,15 @@ def plot_precision_recall(results, classifiers=None):
     h = ax2.set_ylabel('Recall', color='#F3A258', labelpad=45)
     h.set_rotation(-90)
     
-    if classifiers != None:
+    if labels != None:
         legend_elements = [
-            Line2D([0], [0], color='black', linestyle=linestyle, label=classifier)
-            for linestyle, classifier in zip(linestyles, classifiers)
+            Line2D([0], [0], color='black', linestyle=linestyle, label=label)
+            for linestyle, label in zip(linestyles, labels)
         ]
         ax.legend(handles=legend_elements, bbox_to_anchor=(1.6, 1))
 
-    ax.set_xlabel('Proportion of Grids')
-    plt.title('Precision-Recall at X Proportion of Grids')
+    ax.set_xlabel('Proportion of {}s'.format(level.title()))
+    plt.title('Precision-Recall at X Proportion of {}s'.format(level.title()))
     plt.show()
 
 def calculate_precision(y_test):
@@ -90,16 +163,33 @@ def calculate_recall(y_test, total_pos):
     return recall
 
 def calculate_precision_recall(results):
+    metrics = {
+        'precision' : [],
+        'recall' : []
+    }
+    
     results = results.sort_values('y_pred', ascending=False)
     results = results.reset_index(drop=True)
 
     total_pos = sum(results['y_test'])
-    results['precision'] = results['y_test'].expanding().apply(calculate_precision) 
-    results['recall'] = results['y_test'].expanding().apply(lambda x: calculate_recall(x, total_pos))
+    
+    for x in range(1, 100):
+        top_n = int(len(results)*(x/100))
+        subdata = results.iloc[:top_n, :]
+        y_test = subdata['y_test']
         
-    return results
+        precision = calculate_precision(y_test)
+        recall = calculate_recall(y_test, total_pos)
+        
+        metrics['precision'].append(precision)
+        metrics['recall'].append(recall)
+    
+    metrics = pd.DataFrame(metrics)
+    
+    return metrics
 
 def get_grid_level_results(results):
+    
     def get_mode(x):
         return(stats.mode(x)[0])
 
@@ -121,9 +211,6 @@ def get_grid_level_results(results):
         'y_test': get_mode
     })
     
-    results_grid = calculate_precision_recall(results_grid)
-    plot_precision_recall([results_grid])
-    
     return results_grid
 
 def get_cv_iterator(data):
@@ -140,117 +227,17 @@ def get_cv_iterator(data):
             
     return cv_iterator, [AREA_CODES[x] for x in areas]
 
-def rfecv_feature_selection(clf, X, y, cv, scoring='f1', step=10, verbose=0):    
-     
-    # Instantiate RFE feature selector
-    rfe_selector = RFECV(
-        clf, step=step, cv=cv, scoring=scoring, verbose=verbose, n_jobs=-1
-    )
-    
-    # Fit RFE feature selector
-    rfe_selector = rfe_selector.fit(X, y)
-    
-    # Get selected features
-    rfe_support = rfe_selector.support_
-    rfe_features = X.loc[:, rfe_support].columns.tolist()
-    
-    return rfe_features
-
-def nested_spatial_cv(
-    clf, 
-    X, 
-    y, 
-    splits, 
-    grids,
-    param_grid, 
-    search_type='grid', 
-    feature_selection=True, 
-    verbose=0,
-    random_state=42
-):
-    results = {
-        'grid_id': [],
-        'y_pred': [],
-        'y_test': []
-    }
-        
-    outer_cv, areas = get_cv_iterator(splits)
-    for (train_indices, test_indices), area in tqdm(zip(outer_cv, areas), total=len(areas)):
-        
-        splits_train = splits.loc[train_indices].reset_index(drop=True)    
-        X_train = X.loc[train_indices].reset_index(drop=True)
-        X_test = X.loc[test_indices].reset_index(drop=True)
-        y_train = y.loc[train_indices].reset_index(drop=True)
-        y_test = y.loc[test_indices].reset_index(drop=True)
-        y_grids = grids.loc[test_indices].values
-        
-        inner_cv, _ = get_cv_iterator(splits_train)
-        
-        if feature_selection is True:
-            best_features = rfecv_feature_selection(
-                clf, X_train, y_train, inner_cv, scoring='f1', step=10, verbose=0
-            )
-            X_train = X_train[best_features]
-            X_test = X_test[best_features]
-        
-        pipe_clf = Pipeline([
-            ('scaler',  MinMaxScaler()),
-            ('classifier', clf)
-        ])
-        
-        best_estimator = pipe_clf
-        if search_type is not None:
-            if search_type == 'grid':
-                cv = GridSearchCV(
-                    estimator=pipe_clf, 
-                    param_grid=param_grid,
-                    cv=inner_cv, 
-                    verbose=0, 
-                    scoring='f1',
-                    n_jobs=-1
-                )
-            elif search_type == 'random':
-                cv = RandomizedSearchCV(
-                    estimator=pipe_clf, 
-                    param_distributions=param_grid,
-                    n_iter=5,
-                    cv=inner_cv, 
-                    verbose=0, 
-                    scoring='f1',
-                    n_jobs=-1,
-                    random_state=random_state
-                )
-            cv.fit(X_train, y_train)
-            best_estimator = cv.best_estimator_
-            
-        best_estimator.fit(X_train, y_train)
-        
-        try:
-            y_pred = best_estimator.predict_proba(X_test)[:, 1]
-        except:
-            d = best_estimator.decision_function(X_test)
-            y_pred = np.exp(d) / np.sum(np.exp(d))
-            
-        y_test, y_pred = list(y_test), list(y_pred)
-        
-        # Concatenate all out-of-fold predictions
-        results['grid_id'].extend(y_grids)
-        results['y_test'].extend(y_test)
-        results['y_pred'].extend(y_pred)
-            
-    results = pd.DataFrame(results)
-    return results
-
 def spatial_cv(clf, X, y, splits, grids, verbose=0):
     
     results = {
         'grid_id': [],
+        'area': [],
         'y_pred': [],
         'y_test': []
     }
     
     cv, areas = get_cv_iterator(splits)
-    for (train_indices, test_indices), area in tqdm(zip(cv, areas), total=len(areas)):
+    for (train_indices, test_indices), area in zip(cv, areas):
         
         # Split into train and test splits
         X_train, X_test = X.loc[train_indices], X.loc[test_indices]
@@ -262,6 +249,7 @@ def spatial_cv(clf, X, y, splits, grids, verbose=0):
             ('scaler',  MinMaxScaler()),
             ('classifier', clf)
         ])
+        
         pipe_clf.fit(X_train, y_train)
             
         # Predict on test set
@@ -269,6 +257,8 @@ def spatial_cv(clf, X, y, splits, grids, verbose=0):
         y_test, y_pred = list(y_test), list(y_pred)
         
         # Concatenate all out-of-fold predictions
+        area_list = [area for x in range(len(y_test))]
+        results['area'].extend(area_list)
         results['grid_id'].extend(y_grids)
         results['y_test'].extend(y_test)
         results['y_pred'].extend(y_pred)
