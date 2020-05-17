@@ -172,7 +172,6 @@ def get_preds_windowing(
 
     # Read bands 
 
-    #print('Reading {}...'.format(area))
     src_file = area_dict[area]['images'][0]
     windows = make_windows(src_file, grid_blocks = grid_blocks)
 
