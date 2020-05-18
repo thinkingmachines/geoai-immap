@@ -1,5 +1,7 @@
 import os
+import itertools
 from operator import itemgetter
+
 import matplotlib.pyplot as plt
 from scipy import stats
 from tqdm import tqdm
@@ -14,6 +16,15 @@ from sklearn.preprocessing import (
     MinMaxScaler,
     StandardScaler
 )
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.svm import LinearSVC
+from sklearn.calibration import CalibratedClassifierCV
+
+import random
+SEED = 42
 
 AREA_CODES = {
     0 : 'Maicao', 
@@ -32,7 +43,22 @@ VALUE_CODES = {
     3 : 'Unoccupied land'
 }
 
-def resample(data, num_neg_samples, random_state):    
+def resample(data, num_neg_samples, random_state):  
+    """
+    Resamples the dataset as follows:
+        Positive samples: Due to the sparsity of postive data samples,
+            we included all positive samples per municipality.
+        Negative samples: We resample n negative samples, 40% being 
+            formal settlements and 60% being unoccupied land areas.
+    
+    Args:
+        data (pd.DataFrame) : The dataframe containing the data to be resampled
+        num_neg_samples (int) : The number of negative samples 
+        random_state (int) : The random state or seed for reproducibility
+        
+    Returns:
+        data (pd.DataFrame) : The resulting resampled pandas dataframe 
+    """
 
     neg_dist = {
         'Formal settlement': 0.4, 
@@ -84,7 +110,107 @@ def resample(data, num_neg_samples, random_state):
     
     return data
 
-def spatial_cv(clf, X, y, splits, grids, label=None, verbose=0):
+def get_hyperparameters(model):
+    """
+    Generates the models with different hyperparameters to be trained and evaluated
+    using spatial cross validation.
+    
+    Args:
+        model (str) : A string indicating the model or classifier to fetch hyperparameters
+                      for. Supported models include 'logistic_regression', 'random_forest',
+                      and 'linear_svc'.
+        
+    Returns:
+        models (list) : A list of models, where each model is instantiated using different
+                        hyperparameter settings.
+        labels (list) : A list of labels indicating the corresponding model hyperparameters
+                        in string format. The labels are used for plotting charts and file
+                        naming schemes.
+    """
+    
+    if model == 'logistic_regression':
+        param_grid = {
+            'penalty' : ['l2', 'l1'],
+            'C' : [0.001, 0.01, 0.1, 1]
+        }
+        params = list(itertools.product(*[param_grid[param] for param in param_grid]))
+        models, labels = [], []
+        for param in params:
+            models.append(LogisticRegression(penalty=param[0], C=param[1]))
+            labels.append('penalty={}, C={:.3f}'.format(param[0], param[1]))
+            
+        return models, labels
+    
+    if model == 'linear_svc':
+        param_grid = {
+            'C' : [0.001, 0.01, 0.1, 1],
+        }
+        params = list(itertools.product(*[param_grid[param] for param in param_grid]))
+
+        models, labels = [], []
+        for param in params:
+            models.append(CalibratedClassifierCV(LinearSVC(C=param[0], random_state=SEED)))
+            labels.append('C={:.3f}'.format(param[0]))
+            
+        return model, labels
+    
+    if model == 'random_forest':
+        param_grid = {
+            'n_estimators': [100, 300, 500, 800, 1200],
+            'max_depth': [5, 8, 12],
+            'min_samples_split': [2, 5, 10, 15],
+            'min_samples_leaf': [1, 2, 5, 10] 
+        }
+        params = list(itertools.product(
+            *[param_grid[param] for param in param_grid]
+        ))
+        
+        # Randomly sample 5 parameter settings due to 
+        # the large number of combinations
+        random.seed(SEED) 
+        params = random.sample(params, 5)
+
+        models, labels = [], []
+        for param in params:
+            models.append(
+                RandomForestClassifier(
+                    n_estimators=param[0], 
+                    max_depth=param[1], 
+                    min_samples_split=param[2],
+                    min_samples_leaf=param[3],
+                    random_state=SEED
+                )
+            )
+            labels.append(
+                'n_estimators={}, max_depth={}, min_samples_split={}, min_samples_leaf={}'.format(
+                    param[0], param[1], param[2], param[3]
+                )
+            )
+            
+        return models, labels
+
+def spatial_cv(clf, X, y, splits, grids, label=None):
+    """
+    Implements spatial cross validation (CV) in the form of a 
+    leave-one-municipality-out CV scheme. 
+    
+    Args:
+        clf (sklearn classifier) : The machine learning classifier to be evaluated
+        X (pd.DataFrame) : A pandas dataframe containing the features as columns
+        y (pd.DataFrame) : A pandas dataframe containing the target variable
+        splits (pd.DataFrame) : A pandas dataframe having column 'area' which 
+                                contains the municipalities to split by
+        grids (pd.Series) : A pandas series containing the grid unique id ('uid').
+                            This is used for calcuating settlement-level performance.
+        label (str) : A string describing more information about the model, e.g.
+                      model hyperparameters or model name. The label is printed
+                      in the progress bar (default None)
+        
+    Returns:
+        results (pd.DataFrame) : A pandas dataframe containing the y_preds and y_tests,
+                                 along with the grid id and the corresponding area of 
+                                 corresponding pixel.
+    """
     
     results = {
         'grid_id': [],
@@ -136,9 +262,23 @@ def spatial_cv(clf, X, y, splits, grids, label=None, verbose=0):
     
     results = pd.DataFrame(results)
     
-    return results
+    return results       
 
 def get_grid_level_results(results):
+    """
+    Calculates grid or settlement-level prediction by aggregating the pixels
+    within each grid (for negative samples) or informal settlement polygon 
+    (for positive samples). 
+    
+    Specifically, we calculte the mean of the top 10% pixels per grid or polygon.
+    
+    Args:
+        results (pd.DataFrame) : A pandas dataframe containing the y_preds, y_tests,
+                                 and grid id to be aggregated by. 
+    Returns:
+        results_grid (pd.DataFrame) : A pandas dataframe containing the predictions,
+                                      aggregated by grid_id. 
+    """
     
     def get_mode(x):
         return(stats.mode(x)[0])
@@ -163,16 +303,27 @@ def get_grid_level_results(results):
     
     return results_grid
 
-def calculate_precision(y_test):
-    if len(y_test) == 0: return 0
-    precision = sum(y_test)/len(y_test)
-    return precision
-
-def calculate_recall(y_test, total_pos):
-    recall = sum(y_test)/total_pos
-    return recall
-
 def calculate_precision_recall(results):
+    """
+    Calculates the cumulative precision and recall at the top x% of predictions. 
+    
+    Args:
+        results (pd.DataFrame) : A pandas dataframe containing the y_preds, y_tests,
+                                 grid ids, and corresponding area ids per pixel.
+    Returns:
+        metrics (pd.DataFrame) : A pandas dataframe containing the precision and recall
+                                 at every x% of predictions, sorted in descending order
+    """
+    
+    def calculate_precision(y_test):
+        if len(y_test) == 0: return 0
+        precision = sum(y_test)/len(y_test)
+        return precision
+
+    def calculate_recall(y_test, total_pos):
+        recall = sum(y_test)/total_pos
+        return recall
+        
     metrics = {
         'precision' : [],
         'recall' : []
@@ -198,7 +349,35 @@ def calculate_precision_recall(results):
     
     return metrics
 
-def evaluate_model(models, labels, X, y, splits, grids, verbose=2):
+def evaluate_model(models, labels, X, y, splits, grids):
+    """
+    Returns pixel-level and grid-level predictions and performance metrics.
+    
+    Args:
+        models (list) : A list of models, where each model is instantiated using different
+                        hyperparameter settings.
+        labels (list) : A list of labels indicating the corresponding model hyperparameters
+                        in string format. 
+        X (pd.DataFrame) : A pandas dataframe containing the features as columns
+        y (pd.DataFrame) : A pandas dataframe containing the target variable
+        splits (pd.DataFrame) : A pandas dataframe having column 'area' which 
+                                contains the municipalities to split by
+        grids (pd.Series) : A pandas series containing the grid unique id ('uid').
+                            This is used for calcuating settlement-level performance.
+    
+    Returns:
+        output (Python dict) : A Python dictionary containing the following keys and values:
+            - 'labels' : A list of string labels describing each model
+            - 'pixel_preds': A list of pandas dataframes containing the pixel-level 
+                             predictions per model
+            - 'grid_preds' : A list of pandas dataframes containing grid-level 
+                             predictions per model
+            - 'pixel_metrics' : A list of pandas dataframes containing pixel-level 
+                                metrics per model
+            - 'grid_metrics' : A list of pandas dataframes containing the grid-level
+                               metrics per model
+    """    
+    
     output = {
         'labels' : [],
         'pixel_preds' : [],
@@ -208,7 +387,14 @@ def evaluate_model(models, labels, X, y, splits, grids, verbose=2):
     }
     
     for model, label in zip(models, labels):
-        pixel_preds = spatial_cv(model, X, y, splits=splits, grids=grids, label=label, verbose=2)
+        pixel_preds = spatial_cv(
+            model, 
+            X, 
+            y, 
+            splits=splits, 
+            grids=grids, 
+            label=label
+        )
         grid_preds = get_grid_level_results(pixel_preds)
 
         pixel_metrics = calculate_precision_recall(pixel_preds)
@@ -222,7 +408,32 @@ def evaluate_model(models, labels, X, y, splits, grids, verbose=2):
         
     return output  
 
-def plot_precision_recall(results, labels=None, indexes=None, level='grid', legend_title=None, subtitle=''):
+def plot_precision_recall(
+    results, 
+    labels=None, 
+    indexes=None, 
+    level='grid', 
+    legend_title=None, 
+    subtitle=''
+):
+    """
+    Plots the precision-recall curves for each model output in the list of results. 
+    
+    Args:
+        results (list) : A list of model results (pandas dataframes) to plot 
+        labels (list) : A list of labels that correspond with each model 
+                        result (default: None)
+        indexes (list) : A list of integers specifying the result at the specified 
+                         indices to plot (default: None)
+        level (str) : A string specifying the level of aggregation. 
+                      Values can be either 'pixel' or 'grid'
+        legend_title (str) : A string specifying the legend title (default: None)
+        subtitle (str) : A string indicating a subtitle for the chart.
+        
+    Returns:
+        None
+    """
+    
     if indexes is not None:
         results = itemgetter(*indexes)(results)
         labels = itemgetter(*indexes)(labels)
@@ -258,7 +469,21 @@ def plot_precision_recall(results, labels=None, indexes=None, level='grid', lege
     plt.title(subtitle,fontsize=11)
     plt.show()
 
-def evaluate_model_per_area(results, areas):    
+def evaluate_model_per_area(results, areas):   
+    """
+    Generates results per municipality.
+    
+    Args:
+        results (list) : A list of results (pandas dataframes) per model
+        areas (list) : A list of integers that map to a particular area 
+                       (see AREA_CODES)
+    
+    Results:
+        output (Python dict) : A dictionary of dictionaries, where the keys are 
+                               the municipalities and the values are the result 
+                               dictionaries containing 'labels', 'pixel_preds', 
+                               'grid_preds', 'pixel_metrics', and 'grid_metrics'
+    """
     
     output = {
         area : {
@@ -286,7 +511,33 @@ def evaluate_model_per_area(results, areas):
             
     return output
 
-def plot_precision_recall_per_area(results, areas, level, legend_title, indexes=None):
+def plot_precision_recall_per_area(
+    results, 
+    areas, 
+    level, 
+    legend_title, 
+    indexes=None
+):
+    """
+    Plots the precision-recall curves for each model output in the list of results. 
+    
+    Args:
+        results (list) : A list of model results (pandas dataframes) to plot 
+        areas (list) : A list of integers that map to a particular area 
+                       (see AREA_CODES)
+        level (str) : A string specifying the level of aggregation. 
+                      Values can be either 'pixel' or 'grid'
+        legend_title (str) : A string specifying the legend title (default: None)
+        indexes (list) : A list of integers specifying the result at the specified 
+                         indices to plot (default: None)
+        
+    Results:
+        area_results (dict) : A dictionary of dictionaries, where the keys are 
+                              the municipalities and the values are the result 
+                              dictionaries containing 'labels', 'pixel_preds', 
+                              'grid_preds', 'pixel_metrics', and 'grid_metrics'
+    """
+    
     area_results = evaluate_model_per_area(results['pixel_preds'], areas)
     
     if indexes is None:
@@ -307,6 +558,17 @@ def plot_precision_recall_per_area(results, areas, level, legend_title, indexes=
     return area_results
 
 def save_results(results, output_dir, model_prefix):
+    """
+    Saves each dataframe in the results dictionary as a CSV file.
+    
+    Args:
+        results: The Python dictionary that contains the results
+        output_dir (str) : The output directory
+        model_prefix : The model name as a prefix
+        
+    Returns:
+        None
+    """
     
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -332,16 +594,26 @@ def save_results(results, output_dir, model_prefix):
                 pred.to_csv(filename, index=False)
 
 def load_results(labels, output_dir, model_prefix):    
+    """
+    Loads the CSV results as pandas dataframes
+    
+    Args:
+        labels (list) : A list of string labels for each unique model
+                        The label typically indicates the hyperparameters 
+        output_dir (str) : The output directory
+        model_prefix : The model name as a prefix
+        
+    Returns:
+        results: The Python dictionary that contains the results
+    """
+    
     results = {
-        'labels' : [],
         'pixel_preds' : [],
         'grid_preds' : [],
         'pixel_metrics' : [],
         'grid_metrics' : []
     }
-    
-    for label in labels:
-        results['labels'].append(label)
+    results['labels'] = labels
                 
     for level in ['grid', 'pixel']:
         for type_ in ['preds', 'metrics']:

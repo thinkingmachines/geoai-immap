@@ -126,7 +126,11 @@ def save_predictions_window(pred, image_src, output_file, window, tfm):
             dest.write(out_image, 1)
 
 def rename_ind_cols(df):
-    """Renames columns according to column names used by model"""
+    """
+    Renames columns according to column names used by model
+    
+    """
+    
     cols = [c for c in df.columns if 'I' in c]
     renaming = {}
     ind_dict = {
@@ -192,9 +196,7 @@ def get_preds_windowing(
         features = best_features
 
         # Prettify Tiff
-        data = model.named_steps["scaler"].transform(data)
-        preds = model.named_steps["classifier"]._predict_proba_lr(data)[:, 1]
-        #preds = model.predict_proba(data)[:, 1]
+        preds = model.predict_proba(data)[:, 1]
         if threshold > 0:
             preds[(preds < threshold)] = 0
             
@@ -221,7 +223,6 @@ def stitch(output_file, tmp_dir):
         
     Returns:
         result () : The stitched image
-    
     """
     
     p = Path(tmp_dir)
