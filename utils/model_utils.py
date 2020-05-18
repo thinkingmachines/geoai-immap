@@ -295,8 +295,9 @@ def get_grid_level_results(results):
     grids.extend(list(counts[counts > 10].index))
     results = results[results['grid_id'].isin(grids)]
     
-    results_grid = results.groupby('grid_id')[['grid_id', 'y_pred', 'y_test']].agg({
+    results_grid = results.groupby('grid_id')[['grid_id', 'area', 'y_pred', 'y_test']].agg({
         'grid_id': get_mode,
+        'area' : get_mode,
         'y_pred': get_top_percentile,
         'y_test': get_mode
     })
@@ -469,14 +470,12 @@ def plot_precision_recall(
     plt.title(subtitle,fontsize=11)
     plt.show()
 
-def evaluate_model_per_area(results, areas):   
+def evaluate_model_per_area(results_):   
     """
     Generates results per municipality.
     
     Args:
         results (list) : A list of results (pandas dataframes) per model
-        areas (list) : A list of integers that map to a particular area 
-                       (see AREA_CODES)
     
     Results:
         output (Python dict) : A dictionary of dictionaries, where the keys are 
@@ -484,7 +483,7 @@ def evaluate_model_per_area(results, areas):
                                dictionaries containing 'labels', 'pixel_preds', 
                                'grid_preds', 'pixel_metrics', and 'grid_metrics'
     """
-    
+        
     output = {
         area : {
             'labels' : [],
@@ -493,17 +492,19 @@ def evaluate_model_per_area(results, areas):
             'pixel_metrics' : [],
             'grid_metrics' : []
         }
-        for area in areas
+        for area in AREA_CODES
     }
     
-    for area in areas:
+    results = results_['pixel_preds']
+    for area in AREA_CODES:
         for result in results:
             pixel_preds = result[result['area'] == area]
             grid_preds = get_grid_level_results(pixel_preds)
 
             pixel_metrics = calculate_precision_recall(pixel_preds)
             grid_metrics = calculate_precision_recall(grid_preds)
-
+            
+            output[area]['labels'] = results_['labels']
             output[area]['pixel_preds'].append(pixel_preds)
             output[area]['grid_preds'].append(grid_preds)
             output[area]['pixel_metrics'].append(pixel_metrics)
@@ -513,7 +514,6 @@ def evaluate_model_per_area(results, areas):
 
 def plot_precision_recall_per_area(
     results, 
-    areas, 
     level, 
     legend_title, 
     indexes=None
@@ -523,8 +523,6 @@ def plot_precision_recall_per_area(
     
     Args:
         results (list) : A list of model results (pandas dataframes) to plot 
-        areas (list) : A list of integers that map to a particular area 
-                       (see AREA_CODES)
         level (str) : A string specifying the level of aggregation. 
                       Values can be either 'pixel' or 'grid'
         legend_title (str) : A string specifying the legend title (default: None)
@@ -538,12 +536,12 @@ def plot_precision_recall_per_area(
                               'grid_preds', 'pixel_metrics', and 'grid_metrics'
     """
     
-    area_results = evaluate_model_per_area(results['pixel_preds'], areas)
+    area_results = evaluate_model_per_area(results)
     
     if indexes is None:
         indexes = [x for x in range(len(results['labels']))]
     
-    for area in areas:
+    for area in AREA_CODES:
         
         plot_precision_recall(
             itemgetter(*indexes)(
