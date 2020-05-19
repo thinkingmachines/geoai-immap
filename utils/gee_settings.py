@@ -203,7 +203,7 @@ admin2RefN = {
     
     'yopal': 'Yopal',
     
-    'puertocarreno': 'Puerto Carreno', 
+    'puertocarreno2': 'Puerto Carreno', 
     'bucaramanga': 'Bucaramanga',
     'inirida': 'Inirida',
     'monteria': 'Monteria',
@@ -216,7 +216,11 @@ admin2RefN = {
     'ocana': 'Ocana',
     'pasto': 'Pasto',
     'puertosantander': 'Puerto Santander',
-    'tame2': 'Tame',
+    'tame': 'Tame',
     'yopal': 'Yopal',
+    
+    'sabanalargaatlantico': 'Sabanalarga',
+    'cumbal': 'Cumbal',
+    'cali': 'Cali',
     
 }
