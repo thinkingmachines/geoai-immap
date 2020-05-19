@@ -201,7 +201,7 @@ def spatial_cv(clf, X, y, splits, grids, label=None):
         splits (pd.DataFrame) : A pandas dataframe having column 'area' which 
                                 contains the municipalities to split by
         grids (pd.Series) : A pandas series containing the grid unique id ('uid').
-                            This is used for calcuating settlement-level performance.
+                            This is used for calculating settlement-level performance.
         label (str) : A string describing more information about the model, e.g.
                       model hyperparameters or model name. The label is printed
                       in the progress bar (default None)
