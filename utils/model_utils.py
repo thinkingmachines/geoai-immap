@@ -43,6 +43,25 @@ VALUE_CODES = {
     3 : 'Unoccupied land'
 }
 
+def calculate_score_distribution(results):
+    #results = lr_results['pixel_preds'][6]
+
+    def subset(result):
+        true = result[result['y_test'] == 1]['y_pred']
+        false = result[result['y_test'] == 0]['y_pred']
+        return false, true
+
+    for num, area in enumerate(AREA_CODES):
+        result = results[results['area'] == area]
+        negatives = subset(result)[0]
+        positives = subset(result)[1]
+        bins = np.histogram(np.hstack((negatives,positives)), bins=30)[1] 
+        plt.hist(negatives, bins=bins, alpha=0.7, label='Not informal settlement', color='#5268B4')
+        plt.hist(positives, bins=bins, alpha=0.7, label='Informal settlement', color='#EF4631')
+        plt.title('{} Municipality\nScore Distribution'.format(AREA_CODES[area]))
+        plt.legend(loc='upper right')
+        plt.show()
+
 def resample(data, num_neg_samples, random_state):  
     """
     Resamples the dataset as follows:
@@ -283,10 +302,10 @@ def get_grid_level_results(results):
     def get_mode(x):
         return(stats.mode(x)[0])
 
-    def get_top_percentile(x):
-        percentile = 0.10
-        top_n = int(percentile*len(x))
-        x = sorted(x, reverse=True)[:top_n]
+    def get_top_n_percent(x, percent=0.10):
+        top_n = int(percent*len(x))
+        score_at_top_n = sorted(x, reverse=True)[top_n]
+        x = x[(x >= score_at_top_n)]
         return(np.mean(x))
     
     # Remove grids with less than 10 pixels
@@ -295,10 +314,12 @@ def get_grid_level_results(results):
     grids.extend(list(counts[counts > 10].index))
     results = results[results['grid_id'].isin(grids)]
     
-    results_grid = results.groupby('grid_id')[['grid_id', 'area', 'y_pred', 'y_test']].agg({
+    results_grid = results.groupby('grid_id')[[
+        'grid_id', 'area', 'y_pred', 'y_test'
+    ]].agg({
         'grid_id': get_mode,
         'area' : get_mode,
-        'y_pred': get_top_percentile,
+        'y_pred': get_top_n_percent,
         'y_test': get_mode
     })
     
@@ -334,10 +355,10 @@ def calculate_precision_recall(results):
     results = results.reset_index(drop=True)
 
     total_pos = sum(results['y_test'])
-    
     for x in range(1, 100):
         top_n = int(len(results)*(x/100))
-        subdata = results.iloc[:top_n, :]
+        score_at_top_n = results['y_pred'].iloc[top_n]
+        subdata = results[results['y_pred'] >= score_at_top_n]
         y_test = subdata['y_test']
         
         precision = calculate_precision(y_test)
@@ -415,7 +436,7 @@ def plot_precision_recall(
     indexes=None, 
     level='grid', 
     legend_title=None, 
-    subtitle=''
+    area=''
 ):
     """
     Plots the precision-recall curves for each model output in the list of results. 
@@ -434,7 +455,7 @@ def plot_precision_recall(
     Returns:
         None
     """
-    
+            
     if indexes is not None:
         results = itemgetter(*indexes)(results)
         labels = itemgetter(*indexes)(labels)
@@ -465,9 +486,12 @@ def plot_precision_recall(
         ]
         ax.legend(handles=legend_elements, bbox_to_anchor=(1.1, 1), title=legend_title)
 
-    ax.set_xlabel('Proportion of {}s'.format(level.title()))
-    plt.suptitle('Precision-Recall at X Proportion of {}s'.format(level.title()), fontsize=12)
-    plt.title(subtitle,fontsize=11)
+    level_label = level
+    if level == 'grid': level_label = 'settlement'
+    ax.set_xlabel('Top x% {}s'.format(level_label.title()))
+    plt.suptitle('{}Precision-Recall at Top x% of {}s'.format(
+        area, level_label.title()
+    ), fontsize=12, y=1.01)
     plt.show()
 
 def evaluate_model_per_area(results_):   
@@ -550,7 +574,7 @@ def plot_precision_recall_per_area(
             labels=itemgetter(*indexes)(results['labels']), 
             level=level, 
             legend_title=legend_title,
-            subtitle= '{} Municipality'.format(AREA_CODES[area])
+            area= '{} Municipality \n'.format(AREA_CODES[area])
         )
     
     return area_results
@@ -572,24 +596,22 @@ def save_results(results, output_dir, model_prefix):
         os.makedirs(output_dir)
     
     for level in ['grid', 'pixel']:
-        for type_ in ['preds', 'metrics']:
+        labels = results['labels']
+        preds_label = '{}_preds'.format(level)
+        preds = results[preds_label]
             
-            labels = results['labels']
-            preds_label = '{}_{}'.format(level, type_)
-            preds = results[preds_label]
-            
-            for pred, label in zip(preds, labels) :
+        for pred, label in zip(preds, labels) :
                 
-                param_label = label.translate(
-                    str.maketrans('', '', string.punctuation.replace('.', ''))
-                ).replace(' ', '_').lower()
-                filename = '{}{}_{}_{}.csv'.format(
-                    output_dir, 
-                    model_prefix, 
-                    preds_label, 
-                    param_label
-                )
-                pred.to_csv(filename, index=False)
+            param_label = label.translate(
+                str.maketrans('', '', string.punctuation.replace('.', ''))
+            ).replace(' ', '_').lower()
+            filename = '{}{}_{}_{}.csv'.format(
+                output_dir, 
+                model_prefix, 
+                preds_label, 
+                param_label
+            )
+            pred.to_csv(filename, index=False)
 
 def load_results(labels, output_dir, model_prefix):    
     """
@@ -613,24 +635,28 @@ def load_results(labels, output_dir, model_prefix):
     }
     results['labels'] = labels
                 
-    for level in ['grid', 'pixel']:
-        for type_ in ['preds', 'metrics']:
+    for label in labels:
+        param_label = label.translate(
+            str.maketrans('', '', string.punctuation.replace('.', ''))
+        ).replace(' ', '_').lower()
+
+        filename = '{}{}_{}_{}.csv'.format(
+                output_dir, 
+                model_prefix,
+                'pixel_preds', 
+                param_label
+            )
+        
+        pixel_preds = pd.read_csv(filename)
+        results['pixel_preds'].append(pixel_preds)
             
-            preds_label = '{}_{}'.format(level, type_)   
-            results[preds_label] = []
-
-            for label in labels:
-                param_label = label.translate(
-                    str.maketrans('', '', string.punctuation.replace('.', ''))
-                ).replace(' ', '_').lower()
-
-                filename = '{}{}_{}_{}.csv'.format(
-                        output_dir, 
-                        model_prefix,
-                        preds_label, 
-                        param_label
-                    )
-                preds = pd.read_csv(filename)
-                results[preds_label].append(preds)
-                
+        pixel_metrics = calculate_precision_recall(pixel_preds)
+        results['pixel_metrics'].append(pixel_metrics)
+            
+        grid_preds = get_grid_level_results(pixel_preds)
+        results['grid_preds'].append(grid_preds)
+        
+        grid_metrics = calculate_precision_recall(grid_preds)
+        results['grid_metrics'].append(grid_metrics)
+        
     return results
