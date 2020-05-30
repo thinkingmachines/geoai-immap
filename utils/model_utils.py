@@ -22,6 +22,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.svm import LinearSVC
 from sklearn.calibration import CalibratedClassifierCV
+import seaborn as sns
 
 import random
 SEED = 42
@@ -43,7 +44,56 @@ VALUE_CODES = {
     3 : 'Unoccupied land'
 }
 
-def calculate_score_distribution(results):
+def generate_iou_matrix(results_dict, index, percent=0.10):
+    for area in AREA_CODES:    
+        results_pairs =  list(itertools.product(list(results_dict.keys()), list(results_dict.keys())))
+
+        matrix = {'model1': [], 'model2': [], 'iou': []}
+
+        for i in range(len(results_pairs)):
+            label1, label2 = results_pairs[i]
+            results1 = results_dict[label1]
+            results2 = results_dict[label2]
+            
+            area_results1 = results1[area]['grid_preds'][index]
+            area_results2 = results2[area]['grid_preds'][index]
+            
+            intersection = intersect_membership(area_results1, area_results2, percent)
+
+            matrix['model1'].append(label1)
+            matrix['model2'].append(label2)
+            matrix['iou'].append(intersection)
+
+        matrix = pd.DataFrame(matrix)
+        matrix_pivot = matrix.pivot(index='model1', columns='model2', values='iou')
+
+        fig, ax = plt.subplots(figsize=(3,3))
+        sns.heatmap(matrix_pivot, annot=True, cbar=False, cmap="YlGnBu", ax=ax)
+        plt.yticks(rotation=0) 
+        ax.set_ylim(len(matrix_pivot), -0.5)
+
+        plt.suptitle('{} Municipality'.format(AREA_CODES[area]), x=0.65, y=0.95, fontsize=12)
+        plt.tight_layout()
+        plt.xlabel('')
+        plt.ylabel('')
+        plt.show()
+
+def intersect_membership(results1, results2, percent=0.10):
+    # Sort results in descending order
+    results1 = results1.sort_values('y_pred', ascending=False)
+    results2 = results2.sort_values('y_pred', ascending=False)
+    
+    # Get the top 10%
+    results1_top = results1[0:int(results1.shape[0]*(percent))]
+    results2_top = results2[0:int(results2.shape[0]*(percent))]
+
+    # Convert to set
+    set1 = set(list(results1_top['grid_id']))
+    set2 = set(list(results2_top['grid_id']))
+
+    return len(set1.intersection(set2)) / len(set1.union(set2)) 
+
+def calculate_score_distribution(results, n_bins=30):
     #results = lr_results['pixel_preds'][6]
 
     def subset(result):
@@ -55,10 +105,12 @@ def calculate_score_distribution(results):
         result = results[results['area'] == area]
         negatives = subset(result)[0]
         positives = subset(result)[1]
-        bins = np.histogram(np.hstack((negatives,positives)), bins=30)[1] 
+        bins = np.histogram(np.hstack((negatives,positives)), bins=n_bins)[1] 
         plt.hist(negatives, bins=bins, alpha=0.7, label='Not informal settlement', color='#5268B4')
         plt.hist(positives, bins=bins, alpha=0.7, label='Informal settlement', color='#EF4631')
         plt.title('{} Municipality\nScore Distribution'.format(AREA_CODES[area]))
+        plt.xlabel('Score')
+        plt.ylabel('Counts')
         plt.legend(loc='upper right')
         plt.show()
 
@@ -488,10 +540,13 @@ def plot_precision_recall(
 
     level_label = level
     if level == 'grid': level_label = 'settlement'
-    ax.set_xlabel('Top x% {}s'.format(level_label.title()))
-    plt.suptitle('{}Precision-Recall at Top x% of {}s'.format(
+    ax.set_xlabel('Top X Proportion of {}s'.format(level_label.title()))
+    
+    y = 1.0
+    if area != '': y += .01
+    plt.suptitle(r'{}Precision-Recall at Top X Proportion of {}s'.format(
         area, level_label.title()
-    ), fontsize=12, y=1.01)
+    ), fontsize=12, y=y)
     plt.show()
 
 def evaluate_model_per_area(results_):   
