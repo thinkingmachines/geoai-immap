@@ -44,8 +44,55 @@ VALUE_CODES = {
     3 : 'Unoccupied land'
 }
 
-def generate_iou_matrix(results_dict, index, percent=0.10):
-    for area in AREA_CODES:    
+def train_model(clf, raw_data, num_neg_samples, random_state):
+    data = resample(
+        raw_data, num_neg_samples=num_neg_samples, random_state=random_state
+    )
+
+    label = 'target'
+    features = [column  for column in data.columns[:-3]]
+    data[label] = data[label].replace({2:0, 3:0})
+
+    X = data[features].fillna(0)
+    y = data[label]
+    
+    pipe_clf = Pipeline([
+        ('scaler',  MinMaxScaler()),
+        ('classifier', clf)
+    ])
+    pipe_clf.fit(X, y)
+    
+    return pipe_clf, features
+
+def plot_sensitivity_heatmap(matrices, areas):
+    figure, axes = plt.subplots(nrows=3, ncols=3, figsize=(8, 7))
+    row_index, col_index = 0, 0
+    
+    for area, matrix in zip(areas, matrices):
+        title = '{} Municipality'.format(AREA_CODES[area])
+        
+        ax = axes[row_index, col_index]
+        sns.heatmap(matrix, annot=True, cbar=False, cmap="YlGnBu", ax=ax)
+               
+        ax.title.set_text(title)
+        ax.set_xlabel('')
+        ax.set_ylabel('')
+        ax.set_xticklabels(matrix.columns, rotation=0, fontsize=10)
+        ax.set_yticklabels(matrix.columns, rotation=0, fontsize=10)
+        
+        if col_index >= 2:
+            row_index += 1
+            col_index = 0
+        else:
+            col_index += 1
+    
+    
+    plt.tight_layout()
+    plt.show()
+
+def generate_iou_matrix_per_area(results_dict, index, areas, percent=0.10):
+    matrices = []
+    for area in areas:    
         results_pairs =  list(itertools.product(list(results_dict.keys()), list(results_dict.keys())))
 
         matrix = {'model1': [], 'model2': [], 'iou': []}
@@ -66,17 +113,9 @@ def generate_iou_matrix(results_dict, index, percent=0.10):
 
         matrix = pd.DataFrame(matrix)
         matrix_pivot = matrix.pivot(index='model1', columns='model2', values='iou')
-
-        fig, ax = plt.subplots(figsize=(3,3))
-        sns.heatmap(matrix_pivot, annot=True, cbar=False, cmap="YlGnBu", ax=ax)
-        plt.yticks(rotation=0) 
-        ax.set_ylim(len(matrix_pivot), -0.5)
-
-        plt.suptitle('{} Municipality'.format(AREA_CODES[area]), x=0.65, y=0.95, fontsize=12)
-        plt.tight_layout()
-        plt.xlabel('')
-        plt.ylabel('')
-        plt.show()
+        matrices.append(matrix_pivot)
+    
+    plot_sensitivity_heatmap(matrices, areas)
 
 def intersect_membership(results1, results2, percent=0.10):
     # Sort results in descending order
@@ -93,26 +132,58 @@ def intersect_membership(results1, results2, percent=0.10):
 
     return len(set1.intersection(set2)) / len(set1.union(set2)) 
 
+def load_neg_sample_results(model_types, neg_samples_strs, neg_samples_dirs):
+    results_dict = {}
+    
+    for model_type in model_types:
+        models, labels = get_hyperparameters(model=model_type)
+        results_dict[model_type] = {}
+
+        for neg_samples_str, neg_samples_dir in zip(neg_samples_strs, neg_samples_dirs):
+            results = load_results(
+                labels, neg_samples_dir, model_prefix=model_type
+            )
+            results_dict[model_type][neg_samples_str] = results
+            results_dict[model_type][neg_samples_str + '_per_area'] = evaluate_model_per_area(results)
+            
+    return results_dict
+
 def calculate_score_distribution(results, n_bins=30):
-    #results = lr_results['pixel_preds'][6]
 
     def subset(result):
         true = result[result['y_test'] == 1]['y_pred']
         false = result[result['y_test'] == 0]['y_pred']
         return false, true
+    
+    figure, axes = plt.subplots(nrows=3, ncols=3, figsize=(10, 8), constrained_layout=True)
+    row_index, col_index = 0, 0
 
     for num, area in enumerate(AREA_CODES):
         result = results[results['area'] == area]
         negatives = subset(result)[0]
         positives = subset(result)[1]
+        
+        ax = axes[row_index, col_index]
+        
         bins = np.histogram(np.hstack((negatives,positives)), bins=n_bins)[1] 
-        plt.hist(negatives, bins=bins, alpha=0.7, label='Not informal settlement', color='#5268B4')
-        plt.hist(positives, bins=bins, alpha=0.7, label='Informal settlement', color='#EF4631')
-        plt.title('{} Municipality\nScore Distribution'.format(AREA_CODES[area]))
-        plt.xlabel('Score')
-        plt.ylabel('Counts')
-        plt.legend(loc='upper right')
-        plt.show()
+        ax.hist(negatives, bins=bins, alpha=0.7, label='Negative Class', color='#5268B4')
+        ax.hist(positives, bins=bins, alpha=0.7, label='Positive Class', color='#EF4631')
+        ax.title.set_text('{} Municipality\nScore Distribution'.format(AREA_CODES[area]))
+        ax.set_xlabel('Score')
+        ax.set_ylabel('Counts')
+        
+        if col_index >= 2:
+            row_index += 1
+            col_index = 0
+        else:
+            col_index += 1
+    
+    #ax.legend(loc='bottom right')
+    lines_labels = [ax.get_legend_handles_labels()]
+    lines, labels = [sum(lol, []) for lol in zip(*lines_labels)]
+
+    figure.legend(lines, labels, bbox_to_anchor=(1.15, 1),)
+    plt.show()
 
 def resample(data, num_neg_samples, random_state):  
     """
@@ -223,7 +294,7 @@ def get_hyperparameters(model):
             models.append(CalibratedClassifierCV(LinearSVC(C=param[0], random_state=SEED)))
             labels.append('C={:.3f}'.format(param[0]))
             
-        return model, labels
+        return models, labels
     
     if model == 'random_forest':
         param_grid = {
@@ -488,7 +559,9 @@ def plot_precision_recall(
     indexes=None, 
     level='grid', 
     legend_title=None, 
-    area=''
+    area='',
+    fig=None,
+    ax=None
 ):
     """
     Plots the precision-recall curves for each model output in the list of results. 
@@ -512,7 +585,6 @@ def plot_precision_recall(
         results = itemgetter(*indexes)(results)
         labels = itemgetter(*indexes)(labels)
     
-    fig, ax = plt.subplots()
     ax2 = ax.twinx()
     
     linestyles = ['solid', 'dashed', 'dotted', 'dashdot']
@@ -536,18 +608,19 @@ def plot_precision_recall(
             Line2D([0], [0], color='black', linestyle=linestyle, label=label)
             for linestyle, label in zip(linestyles, labels)
         ]
-        ax.legend(handles=legend_elements, bbox_to_anchor=(1.1, 1), title=legend_title)
+        fig.legend(handles=legend_elements, bbox_to_anchor=(1.1, 1), title=legend_title)
 
     level_label = level
     if level == 'grid': level_label = 'settlement'
     ax.set_xlabel('Top X Proportion of {}s'.format(level_label.title()))
+    ax.title.set_text('{}\nPrecision-Recall at Top X Proportion of {}s'.format(area, level_label.title()))
     
-    y = 1.0
-    if area != '': y += .01
-    plt.suptitle(r'{}Precision-Recall at Top X Proportion of {}s'.format(
-        area, level_label.title()
-    ), fontsize=12, y=y)
-    plt.show()
+    #y = 1.0
+    #if area != '': y += .01
+    #ax.title.set_text(r'{}Precision-Recall at Top X Proportion of {}s'.format(
+    #    area, level_label.title()
+    #)) #, fontsize=12, y=y)
+    #plt.show()
 
 def evaluate_model_per_area(results_):   
     """
@@ -620,8 +693,10 @@ def plot_precision_recall_per_area(
     if indexes is None:
         indexes = [x for x in range(len(results['labels']))]
     
+    figure, axes = plt.subplots(nrows=3, ncols=3, figsize=(15, 10), constrained_layout=True)
+    row_index, col_index = 0, 0
+    
     for area in AREA_CODES:
-        
         plot_precision_recall(
             itemgetter(*indexes)(
                 area_results[area]['{}_metrics'.format(level)]
@@ -629,8 +704,18 @@ def plot_precision_recall_per_area(
             labels=itemgetter(*indexes)(results['labels']), 
             level=level, 
             legend_title=legend_title,
-            area= '{} Municipality \n'.format(AREA_CODES[area])
+            area= '{} Municipality'.format(AREA_CODES[area]),
+            fig=figure,
+            ax=axes[row_index, col_index]
         )
+        if col_index >= 2:
+            row_index += 1
+            col_index = 0
+        else:
+            col_index += 1
+    
+    #plt.tight_layout()
+    plt.show()
     
     return area_results
 
@@ -650,23 +735,22 @@ def save_results(results, output_dir, model_prefix):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     
-    for level in ['grid', 'pixel']:
-        labels = results['labels']
-        preds_label = '{}_preds'.format(level)
-        preds = results[preds_label]
+    labels = results['labels']
+    preds_label = 'pixel_preds'
+    preds = results[preds_label]
             
-        for pred, label in zip(preds, labels) :
+    for pred, label in zip(preds, labels) :
                 
-            param_label = label.translate(
-                str.maketrans('', '', string.punctuation.replace('.', ''))
-            ).replace(' ', '_').lower()
-            filename = '{}{}_{}_{}.csv'.format(
-                output_dir, 
-                model_prefix, 
-                preds_label, 
-                param_label
-            )
-            pred.to_csv(filename, index=False)
+        param_label = label.translate(
+            str.maketrans('', '', string.punctuation.replace('.', ''))
+        ).replace(' ', '_').lower()
+        filename = '{}{}_{}_{}.csv'.format(
+            output_dir, 
+            model_prefix, 
+            preds_label, 
+            param_label
+        )
+        pred.to_csv(filename, index=False)
 
 def load_results(labels, output_dir, model_prefix):    
     """
