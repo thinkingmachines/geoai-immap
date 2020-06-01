@@ -255,10 +255,11 @@ def sen2median(
     #                         yield result
 
     # Export task
-    task = ee.batch.Export.image.toCloudStorage(
+    task = ee.batch.Export.image.toDrive(
+    #task = ee.batch.Export.image.toCloudStorage(
       image= composite.select(['B1','B2','B3','B4','B5','B6','B7','B8','B8A','B9','B11','B12']),
       description= FILENAME,
-      bucket= 'immap-gee',
+      #bucket= 'immap-gee',
       maxPixels= 150000000,
       scale= 10,
       region= region,
