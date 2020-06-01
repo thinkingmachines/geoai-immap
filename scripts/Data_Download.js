@@ -16,27 +16,15 @@
 //+++++++++++ INPUTS ++++++++++++++++++++++++++
 // set output params
 var PRODUCT = 'COPERNICUS/S2'; // S2 for L1C <=2017 and S2_SR for L2A
-var FILENAME = 'gee_arauca_2016';
+var FILENAME = 'gee_testuribia_2015-2016';
+var CLOUD_PCT = 40;
 
 // set date window
-var date1 = ee.Date.fromYMD(2016,1,1); 
+var date1 = ee.Date.fromYMD(2015,1,1); 
 var date2 = ee.Date.fromYMD(2016,12,31);
 
 // select region
 // x,y left, top, right, bottom
-
-// var BBOX = [-73.17020892181104, 11.560920839000062, -72.52724612099996, 10.948171764015513]; // riohacha admin boundary
-// var BBOX = [-72.65839212899994, 11.534938376940019, -72.15850845943176, 11.080548632000045]; // maicao admin boundary
-// var BBOX = [-72.37971307699996, 11.747684544661437, -72.15636466747618, 11.523307245000069]; // uribia admin boundary
-// var BBOX = [-72.903, 11.810, -72.252, 11.396]; // manaure admin boundary
-
-// var BBOX = [-71.20643772199998,6.424234499000022,-69.72014485099999,7.104161825000062]; // arauca admin boundary
-// var BBOX = [-71.69980876899996,6.526376968000022,-70.86773583299998,7.054700505000028]; // arauquita admin boundary
-// var BBOX = [-72.60807671699996,7.723856582000053,-72.34649040099998,8.431575791000057]; // cucuta admin boundary
-// var BBOX = [-73.07343705199997,8.251246337000055,-72.47112479799995,9.142041082000048]; // tibu admin boundary
-// var BBOX = [-74.30657295399999,4.382138206000036,-74.17129610699999,4.633509322000066]; // soacha admin boundary
-// var BBOX = [-72.52267855299993,7.64295204900003,-72.44465188199996,7.902600765000045]; // villa del rosario admin boundary
-
 var BBOX = [-72.292152, 11.734492, -72.244001, 11.686520]; // small uribia urban area
 
 var region = ee.Geometry.Rectangle(BBOX); // restrict view to bounding box;
@@ -131,7 +119,7 @@ var vizParams = {'min': 0,'max': [0.2], 'bands':['B4', 'B3', 'B2'] };   //B4, B3
 var S2 = ee.ImageCollection(PRODUCT)
  .filterDate(date1, date2)
  .filterBounds(region)
-// .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 10))
+ .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", CLOUD_PCT))
  ;
 
 // // View specific images
