@@ -64,12 +64,16 @@ def train_model(clf, raw_data, num_neg_samples, random_state):
     
     return pipe_clf, features
 
-def plot_sensitivity_heatmap(matrices, areas):
-    figure, axes = plt.subplots(nrows=3, ncols=3, figsize=(8, 7))
+def plot_sensitivity_heatmap(matrices, areas, nrows, ncols, figsize):
+    figure, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize)
+    axes = axes.reshape(nrows, ncols)
     row_index, col_index = 0, 0
     
     for area, matrix in zip(areas, matrices):
-        title = '{} Municipality'.format(AREA_CODES[area])
+        if type(area) == int:
+            title = '{} Municipality'.format(AREA_CODES[area])
+        else:
+            title = '{} Municipality'.format(area.title())
         
         ax = axes[row_index, col_index]
         sns.heatmap(matrix, annot=True, cbar=False, cmap="YlGnBu", ax=ax)
@@ -90,7 +94,7 @@ def plot_sensitivity_heatmap(matrices, areas):
     plt.tight_layout()
     plt.show()
 
-def generate_iou_matrix_per_area(results_dict, index, areas, percent=0.10):
+def generate_iou_matrix_per_area(results_dict, index, areas, percent=0.10, nrows=3, ncols=3, figsize=(8, 7)):
     matrices = []
     for area in areas:    
         results_pairs =  list(itertools.product(list(results_dict.keys()), list(results_dict.keys())))
@@ -115,9 +119,14 @@ def generate_iou_matrix_per_area(results_dict, index, areas, percent=0.10):
         matrix_pivot = matrix.pivot(index='model1', columns='model2', values='iou')
         matrices.append(matrix_pivot)
     
-    plot_sensitivity_heatmap(matrices, areas)
+    plot_sensitivity_heatmap(matrices, areas, nrows=nrows, ncols=ncols, figsize=figsize)
 
 def intersect_membership(results1, results2, percent=0.10):
+    if len(results1.columns) == 2:
+        results1.columns = ['grid_id', 'y_pred']
+    if len(results2.columns) == 2:
+        results2.columns = ['grid_id', 'y_pred']
+        
     # Sort results in descending order
     results1 = results1.sort_values('y_pred', ascending=False)
     results2 = results2.sort_values('y_pred', ascending=False)

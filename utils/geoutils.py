@@ -552,7 +552,7 @@ def generate_training_data(area_dict):
     return data, area_code
 
 
-def get_filepaths(areas, images_dir, indices_dir, pos_mask_dir, neg_mask_dir):
+def get_filepaths(areas, images_dir, indices_dir, pos_mask_dir='', neg_mask_dir=''):
     """
     Returns a dictionary containing the image filepaths for each area.
     
