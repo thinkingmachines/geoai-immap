@@ -154,6 +154,34 @@ def rename_ind_cols(df):
 
     return df.rename(columns = renaming)            
 
+def get_rasters_merged(
+    raster_file1,
+    raster_file2,
+    output_file,
+    tmp_dir,
+    grid_blocks=5
+):
+    p = Path(tmp_dir)
+    tmp_files = [str(f) for f in list(p.glob('tmp*.tif'))]
+    for f in tmp_files:
+        os.remove(f)
+            
+    windows = make_windows(raster_file1, grid_blocks = grid_blocks)
+    pbar = tqdm(enumerate(windows), total=len(windows))
+    
+    for idx, window in pbar:
+        raster1 = rio.open(raster_file1).read(1, window=window)
+        raster2 = rio.open(raster_file2).read(1, window=window)
+        result = np.maximum(raster1, raster2)
+        
+        # Save 
+        image_src = raster_file1
+        tmp_file = tmp_dir + 'tmp{}.tif'.format(idx)
+        tfm = transform(window, transform = rio.open(image_src).transform)
+        save_predictions_window(result, image_src, tmp_file, window, tfm)
+     
+    stitch(output_file, tmp_dir)
+
 def get_preds_windowing(
     area, 
     area_dict, 
@@ -170,17 +198,18 @@ def get_preds_windowing(
         os.remove(output)
         
     p = Path(tmp_dir)
-    tmp_files = [str(f) for f in list(p.glob('tmp*.tiff'))]
+    tmp_files = [str(f) for f in list(p.glob('tmp*.tif'))]
     for f in tmp_files:
         os.remove(f)
 
     # Read bands 
-
     src_file = area_dict[area]['images'][0]
     windows = make_windows(src_file, grid_blocks = grid_blocks)
-
-    for idx, window in enumerate(tqdm(windows)):
-
+    
+    pbar = tqdm(enumerate(windows), total=len(windows))
+    for idx, window in pbar:
+        pbar.set_description('Processing {}...'.format(area))
+        
         df_bands = read_bands_window(area_dict, area, window=window)
         df_inds = read_inds_window(area_dict, area, window=window)
         df_test = pd.concat((df_bands, df_inds), axis = 1)
@@ -188,7 +217,6 @@ def get_preds_windowing(
         df_test = df_test.replace([np.inf, -np.inf], 0)
 
         # Prediction
-
         X_test = df_test[best_features].fillna(0)
         all_zeroes = (X_test.iloc[:, :-1].sum(axis=1) == 0)
             
@@ -203,7 +231,6 @@ def get_preds_windowing(
         preds[all_zeroes] = -1
 
         # Save 
-
         image_src = src_file
         output_file = tmp_dir + 'tmp{}.tif'.format(idx)
         tfm = transform(window, transform = rio.open(src_file).transform)
