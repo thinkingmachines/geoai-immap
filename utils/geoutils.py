@@ -19,7 +19,7 @@ import rasterio.mask
 from rasterio.plot import show
 from fiona.crs import to_string
 
-la_guajira = ['maicao', 'uribia', 'riohacha']
+GRID_ID = 1
 
 def write_indices(area_dict, area, indices_dir):
     """
@@ -126,7 +126,11 @@ def save_predictions_window(pred, image_src, output_file, window, tfm):
             dest.write(out_image, 1)
 
 def rename_ind_cols(df):
-    """Renames columns according to column names used by model"""
+    """
+    Renames columns according to column names used by model
+    
+    """
+    
     cols = [c for c in df.columns if 'I' in c]
     renaming = {}
     ind_dict = {
@@ -150,6 +154,34 @@ def rename_ind_cols(df):
 
     return df.rename(columns = renaming)            
 
+def get_rasters_merged(
+    raster_file1,
+    raster_file2,
+    output_file,
+    tmp_dir,
+    grid_blocks=5
+):
+    p = Path(tmp_dir)
+    tmp_files = [str(f) for f in list(p.glob('tmp*.tif'))]
+    for f in tmp_files:
+        os.remove(f)
+            
+    windows = make_windows(raster_file1, grid_blocks = grid_blocks)
+    pbar = tqdm(enumerate(windows), total=len(windows))
+    
+    for idx, window in pbar:
+        raster1 = rio.open(raster_file1).read(1, window=window)
+        raster2 = rio.open(raster_file2).read(1, window=window)
+        result = np.maximum(raster1, raster2)
+        
+        # Save 
+        image_src = raster_file1
+        tmp_file = tmp_dir + 'tmp{}.tif'.format(idx)
+        tfm = transform(window, transform = rio.open(image_src).transform)
+        save_predictions_window(result, image_src, tmp_file, window, tfm)
+     
+    stitch(output_file, tmp_dir)
+
 def get_preds_windowing(
     area, 
     area_dict, 
@@ -166,18 +198,18 @@ def get_preds_windowing(
         os.remove(output)
         
     p = Path(tmp_dir)
-    tmp_files = [str(f) for f in list(p.glob('tmp*.tiff'))]
+    tmp_files = [str(f) for f in list(p.glob('tmp*.tif'))]
     for f in tmp_files:
         os.remove(f)
 
     # Read bands 
-
-    #print('Reading {}...'.format(area))
     src_file = area_dict[area]['images'][0]
     windows = make_windows(src_file, grid_blocks = grid_blocks)
-
-    for idx, window in enumerate(tqdm(windows)):
-
+    
+    pbar = tqdm(enumerate(windows), total=len(windows))
+    for idx, window in pbar:
+        pbar.set_description('Processing {}...'.format(area))
+        
         df_bands = read_bands_window(area_dict, area, window=window)
         df_inds = read_inds_window(area_dict, area, window=window)
         df_test = pd.concat((df_bands, df_inds), axis = 1)
@@ -185,7 +217,6 @@ def get_preds_windowing(
         df_test = df_test.replace([np.inf, -np.inf], 0)
 
         # Prediction
-
         X_test = df_test[best_features].fillna(0)
         all_zeroes = (X_test.iloc[:, :-1].sum(axis=1) == 0)
             
@@ -193,16 +224,13 @@ def get_preds_windowing(
         features = best_features
 
         # Prettify Tiff
-        data = model.named_steps["scaler"].transform(data)
-        preds = model.named_steps["classifier"]._predict_proba_lr(data)[:, 1]
-        #preds = model.predict_proba(data)[:, 1]
+        preds = model.predict_proba(data)[:, 1]
         if threshold > 0:
             preds[(preds < threshold)] = 0
             
         preds[all_zeroes] = -1
 
         # Save 
-
         image_src = src_file
         output_file = tmp_dir + 'tmp{}.tif'.format(idx)
         tfm = transform(window, transform = rio.open(src_file).transform)
@@ -222,7 +250,6 @@ def stitch(output_file, tmp_dir):
         
     Returns:
         result () : The stitched image
-    
     """
     
     p = Path(tmp_dir)
@@ -326,12 +353,7 @@ def read_bands_window(area_dict, area, window):
         data.append(subdata)
         del subdata
     
-    data = pd.concat(data, axis=1)
-    if area in la_guajira:
-        data['la_guajira'] = 1
-    else:
-        data['la_guajira'] = 0
-    
+    data = pd.concat(data, axis=1)    
     return data
 
 def make_windows(image_file, grid_blocks = 5):
@@ -500,10 +522,6 @@ def read_bands(area_dict, area):
         del subdata
     
     data = pd.concat(data, axis=1)
-    if area in la_guajira:
-        data['la_guajira'] = 1
-    else:
-        data['la_guajira'] = 0
     
     return data
 
@@ -530,19 +548,23 @@ def generate_training_data(area_dict):
         print('Reading {}...'.format(area))
 
         # Read positive target mask
-        pos_mask = rio.open(area_dict[area]['pos_mask_tiff'])
-        pos_mask = pos_mask.read(1).ravel()
+        pos = rio.open(area_dict[area]['pos_mask_tiff'])
+        pos_mask = pos.read(1).ravel()
+        pos_grid = pos.read(2).ravel()
 
         # Read negative mask
-        neg_mask = rio.open(area_dict[area]['neg_mask_tiff'])
-        neg_mask = neg_mask.read(1).ravel()
+        neg = rio.open(area_dict[area]['neg_mask_tiff'])
+        neg_mask = neg.read(1).ravel()
+        neg_grid = neg.read(2).ravel()
  
         # Get sum of postive and negative mask
         mask = pos_mask + neg_mask
+        grid = pos_grid + neg_grid
 
         # Read bands
         subdata = read_bands(area_dict, area)
         subdata['target'] = mask
+        subdata['uid'] = grid
         subdata['area'] = idx
         area_code[area] = idx
 
@@ -557,7 +579,7 @@ def generate_training_data(area_dict):
     return data, area_code
 
 
-def get_filepaths(areas, images_dir, indices_dir, pos_mask_dir, neg_mask_dir):
+def get_filepaths(areas, images_dir, indices_dir, pos_mask_dir='', neg_mask_dir=''):
     """
     Returns a dictionary containing the image filepaths for each area.
     
@@ -608,6 +630,8 @@ def explode(gdf):
 
     gs = gdf.explode()
     gdf2 = gs.reset_index().rename(columns={0: "geometry"})
+    if 'class' in gdf2.columns:
+        gdf2 = gdf2.drop("class", axis=1)
     gdf_out = gdf2.merge(
         gdf.drop("geometry", axis=1), left_on="level_0", right_index=True
     )
@@ -629,52 +653,59 @@ def generate_mask(tiff_file, shape_file, output_file, plot=False):
     Returns:
         image (np.array) : A binary mask as a numpy array 
     """
-
+    global GRID_ID
+    
     src = rio.open(tiff_file)
-    gdf = gpd.read_file(shape_file).dropna()
+    raw = gpd.read_file(shape_file).dropna()
+    gdf = explode(raw)
 
     values = {}
         
     if "class" in gdf.columns:
         unique_classes = sorted(gdf["class"].unique())
         values = {value: x + 2 for x, value in enumerate(unique_classes)}
-        values["informal settlement"] = 1
+        values["Informal settlement"] = 1
     
     value = 1.0
-    shapes = []
+    masks, grids = [], []
     for index, (idx, x) in enumerate(gdf.iterrows()):
-        band = 255 / ((idx / gdf.shape[0]) + 1)
-        if "class" in x:
-            value = values[x["class"]]
+        if "class" in x: value = values[x["class"]]
         gdf_json = json.loads(gpd.GeoDataFrame(x).T.to_json())
         feature = [gdf_json["features"][0]["geometry"]][0]
-        shapes.append((feature, value))
+        masks.append((feature, value))
+        grids.append((feature, GRID_ID))
+        GRID_ID += 1
     
-    image = rio.features.rasterize(
-        ((g, v) for (g, v) in shapes), out_shape=src.shape, transform=src.transform
+    masks = rio.features.rasterize(
+        ((g, v) for (g, v) in masks), out_shape=src.shape, transform=src.transform
+    ).astype(rio.uint16)
+    
+    grids = rio.features.rasterize(
+        ((g, v) for (g, v) in grids), out_shape=src.shape, transform=src.transform
     ).astype(rio.uint16)
 
     out_meta = src.meta.copy()
-    out_meta["dtype"] = rio.uint16
-    out_meta["count"] = 1
+    out_meta["count"] = 2
     out_meta["nodata"] = 0
+    out_meta["dtype"] = rio.uint16
     out_meta["compress"] = "deflate"
 
     with rio.open(output_file, "w", **out_meta) as dst:
-        dst.write(image, indexes=1)
+        dst.write(masks, indexes=1)
+        dst.write(grids, indexes=2)
     
     if plot:
         f, ax = plt.subplots(1, 3, figsize=(15, 15))
         gdf.plot(ax=ax[0])
         rio.plot.show(src, ax=ax[1], adjust=None)
-        rio.plot.show(image, ax=ax[2], adjust=None)
+        rio.plot.show(masks, ax=ax[2], adjust=None)
 
         ax[0].set_title("Vector File")
         ax[1].set_title("TIFF")
         ax[2].set_title("Masked")
         plt.show()
         
-    return image, values
+    return masks, grids, values
 
 def get_pos_raster_mask(area_dict, plot=False):
     """
@@ -733,7 +764,7 @@ def get_neg_raster_mask(area_dict, plot=False):
             gdf = gpd.read_file(shape_file)
 
             # Generate masks
-            _, target_dict = generate_mask(
+            _, _, target_dict = generate_mask(
                 tiff_file=tiff_file,
                 shape_file=shape_file,
                 output_file=target_file,
