@@ -16,7 +16,7 @@ The goal of this project is to provide a means for faster, cheaper, and more sca
 
 ![method](./assets/method.PNG)
 
-![results](./assets/results.PNG)
+![results](./assets/validation.JPG)
 
 ## Setup 
 * To get started, create a conda environment as follows:
