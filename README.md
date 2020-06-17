@@ -16,6 +16,8 @@ The goal of this project is to provide a means for faster, cheaper, and more sca
 
 ![method](./assets/method.PNG)
 
+![results](./assets/results.PNG)
+
 ## Setup 
 * To get started, create a conda environment as follows:
 	```sh
@@ -45,22 +47,23 @@ We evaluated model performance across different negative sampling parameters, an
 For privacy concerns, we did not include in this repo the labelled training data that identified informal settlements in Colombia. If you need this dataset, please contact ThinkingMachines or IMMAP at hello@thinkingmachin.es, info@immap.org.
 
 To use your own data, please:
-1. Save informal settlement polygon as GeoPackage "area.gpkg"
+1. Save informal settlement polygon as GeoPackage "area_mask.gpkg"
+1. Save admin boundary for department/municipality as GeoPackage "area.gpkg"
 2. Download satellite images using notebooks/00_Data_Download, (instructions how, inside)
 3. Process the images using notebooks/01_Data_Preprocessing.
 
 Resulting files and their directories should look like the following:
 ```
 ├── data
-│   ├── images
-│       ├── {area}_2015-2016.tif
-│       ├── {area}_2017-2018.tif
-│       ├── {area}_2019-2020.tif
 │   ├── pos_masks
 │       ├── {area}_mask.gpkg
 │   ├── admin_bounds
-│       ├── {area}_mask.gpkg
-│   ├── indices
+│       ├── {area}.gpkg
+│   ├── images <derived>
+│       ├── {area}_2015-2016.tif
+│       ├── {area}_2017-2018.tif
+│       ├── {area}_2019-2020.tif
+│   ├── indices <derived>
 │       ├── indices_{area}_2015-2016.tif
 │       ├── indices_{area}_2017-2018.tif
 │       ├── indices_{area}_2019-2020.tif
