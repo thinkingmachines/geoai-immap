@@ -340,7 +340,7 @@ def get_hyperparameters(model):
             
         return models, labels
 
-def spatial_cv(clf, X, y, splits, grids, label=None):
+def spatial_cv(clf, X, y, splits, grids, label=None, verbose=0):
     """
     Implements spatial cross validation (CV) in the form of a 
     leave-one-municipality-out CV scheme. 
@@ -356,6 +356,7 @@ def spatial_cv(clf, X, y, splits, grids, label=None):
         label (str) : A string describing more information about the model, e.g.
                       model hyperparameters or model name. The label is printed
                       in the progress bar (default None)
+        verbose (int) : if 0, run silently. if 2, print tail of results.
         
     Returns:
         results (pd.DataFrame) : A pandas dataframe containing the y_preds and y_tests,
@@ -412,7 +413,8 @@ def spatial_cv(clf, X, y, splits, grids, label=None):
         results['y_pred'].extend(y_pred)
     
     results = pd.DataFrame(results)
-    
+    if verbose == 2: print(results.tail(3));
+
     return results       
 
 def get_grid_level_results(results):
