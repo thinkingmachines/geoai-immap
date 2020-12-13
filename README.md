@@ -30,9 +30,11 @@ The goal of this project is to provide a means for faster, cheaper, and more sca
 * **modelling_environment.yml** - use for 02_Model_Training, 03_Model_Optimization, 05_Model_Prediction
 
 Notable dependencies include:
+- Ubuntu 16.04
 - Anaconda3-2019.10
 - earthengine-api==0.1.223
 - gdal==3.1.0
+- scikit-learn=0.21.3
 
 ## Code Organization
 This repository is divided into three main parts:
