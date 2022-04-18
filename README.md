@@ -18,16 +18,11 @@ The goal of this project is to provide a means for faster, cheaper, and more sca
 
 ![results](./assets/validation.JPG)
 
-## Setup 
-* To get started, create a conda environment as follows:
-	```sh
-	conda env create -f {ENVIRONMENT}.yml
-	```
-    
-	where ENVIRONMENT can be either 'processing_environment' or 'modelling_environment'.
-
-* **processing_environment.yml** - use for 00_Data_Download and 01_Data_preprocess
-* **modelling_environment.yml** - use for 02_Model_Training, 03_Model_Optimization, 05_Model_Prediction
+## Setup
+1. [Install miniconda](https://developers.google.com/earth-engine/guides/python_install-conda#install_miniconda)
+1. [Create conda environment named ee](https://developers.google.com/earth-engine/guides/python_install-conda#install_api)
+1. [Create conda environment named gdal_env then install gdal inside(https://gdal.org/download.html#conda)
+1. Install conda environment named repo_env from environment.yml
 
 Notable dependencies include:
 - Ubuntu 16.04
