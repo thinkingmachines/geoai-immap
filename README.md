@@ -21,7 +21,7 @@ The goal of this project is to provide a means for faster, cheaper, and more sca
 ## Setup
 1. [Install miniconda](https://developers.google.com/earth-engine/guides/python_install-conda#install_miniconda)
 1. [Create conda environment named ee](https://developers.google.com/earth-engine/guides/python_install-conda#install_api)
-1. [Create conda environment named gdal_env then install gdal inside(https://gdal.org/download.html#conda)
+1. [Create conda environment named gdal_env then install gdal inside](https://gdal.org/download.html#conda)
 1. Install conda environment named repo_env from environment.yml
 
 Notable dependencies include:
