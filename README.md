@@ -1,6 +1,8 @@
 <p align="center">
 <b><a href="#setup">Setup</a></b>
 |
+<b><a href="#usage">Usage</a></b>
+|
 <b><a href="#code-organization">Code Organization</a></b>
 |
 <b><a href="#data">Data</a></b>
@@ -30,6 +32,21 @@ Notable dependencies include:
 - earthengine-api==0.1.223
 - gdal==3.1.0
 - scikit-learn=0.21.3
+
+## Usage
+```
+python run.py --area=’riohacha’ --start 2021 --end 2021
+```
+where
+* area = municipality in [these names](https://github.com/thinkingmachines/geoai-immap/blob/master/utils/gee_settings.py#L4)
+* start = year to start collecting satellite images for rollout, exact date will be made Jan 1, {year}
+* end = year to end collecting satellite images for rollout, exact date will be made Dec 31, {year}
+
+`run.py` consists of 3 scripts that accept area as a parameter:
+* download.py - acquires Sentinel2 images from Google Earth Engine
+* preprocess.py - deflates downloaded images and calculates indices
+* predict.py - generates settlement probability map
+
 
 ## Code Organization
 This repository is divided into three main parts:
