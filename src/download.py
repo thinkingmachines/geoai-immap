@@ -1,9 +1,16 @@
+import geopandas as gpd
+from fiona.crs import to_string
+import pathlib
+from tqdm import tqdm
+
 import sys
+import os
 
 sys.path.insert(0, "../utils")
-sys.path.insert(0, "utils")
-from gee import sen2median
-from gee_settings import BBOX, CLOUD_PARAMS
+sys.path.insert(0, "../data")
+from gee import sen2median, deflatecrop1
+from gee_settings import BBOX, CLOUD_PARAMS, admin2RefN
+from geoutils import run_cmd
 import argparse
 
 parser = argparse.ArgumentParser(
@@ -30,24 +37,50 @@ parser.add_argument(
 
 
 def download(area, start, end):
+
+    areas = [area]
+    years = [f"{start}-{end}"]
+    PRODUCT = "COPERNICUS/S2"  # L1C
+
+    data_dir = "../data/"
+
+    adm_dir = data_dir + "admin_bounds/"
+    img_dir = data_dir + "images/"
+    tmp_dir = data_dir + "tmp/"
+
     def get_minmaxdt(year_str):
         list_ = year_str.split("-")
         return list_[0] + "-01-01", list_[1] + "-12-31"
 
-    year = f"{start}-{end}"
-    cloud_pct, mask = CLOUD_PARAMS[area][year]
-    min_dt, max_dt = get_minmaxdt(year)
-    sen2median(
-        BBOX[area],
-        FILENAME=f"gee_{area}_{year}",
-        min_dt=min_dt,
-        max_dt=max_dt,
-        cloud_pct=cloud_pct,
-        mask=mask,
-        PRODUCT="COPERNICUS/S2",  # L1C
-        verbose=1,
-        wait=True
-    )
+    dirs = [adm_dir, img_dir, tmp_dir]
+    for dir_ in dirs:
+        with pathlib.Path(dir_) as path:
+            if not path.exists():
+                path.mkdir(parents=True, exist_ok=True)
+
+    # get area shape file
+    if os.path.exists(f"{adm_dir}admin_bounds.gpkg"):
+        run_cmd(
+            f"gsutil cp gs://immap-masks/admin_boundaries/admin_bounds.gpkg {adm_dir}"
+        )
+    gdf = gpd.read_file(adm_dir + "admin_bounds.gpkg")
+    fcrs = to_string({"init": "epsg:4326", "no_defs": True})
+    gdf.crs = fcrs
+
+    for area in areas:
+        for year in years:
+            cloud_pct, mask = CLOUD_PARAMS[area][year]
+            min_dt, max_dt = get_minmaxdt(year)
+            sen2median(
+                BBOX[area],
+                FILENAME=f"gee_{area}_{year}",
+                min_dt=min_dt,
+                max_dt=max_dt,
+                cloud_pct=cloud_pct,
+                mask=mask,
+                PRODUCT=PRODUCT,
+                verbose=1,
+            )
 
 
 if __name__ == "__main__":
