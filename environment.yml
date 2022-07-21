@@ -109,7 +109,6 @@ dependencies:
   - pyparsing=3.0.4=pyhd3eb1b0_0
   - pyproj=2.6.1.post1=py37hb3025e9_1
   - pyqt=5.9.2=py37h05f1152_2
-  - pytest
   - python=3.7.13=h12debd9_0
   - python-dateutil=2.8.2=pyhd3eb1b0_0
   - pytz=2021.3=pyhd3eb1b0_0
