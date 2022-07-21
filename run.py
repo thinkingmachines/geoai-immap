@@ -29,6 +29,7 @@ parser.add_argument(
 
 if __name__ == "__main__":
     args = parser.parse_args()
+    run_cmd(f"python src/set_env.py")
     run_cmd(
         f"python src/download.py --area={args.area} --start={args.start} --end={args.end}"
     )
