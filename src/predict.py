@@ -13,18 +13,9 @@ sns.set(style="whitegrid")
 import sys
 
 sys.path.insert(0, "../utils")
-sys.path.insert(0, "utils")
 import model_utils
 import geoutils
 from geoutils import run_cmd
-from env_settings import (
-    data_dir,
-    tmp_dir,
-    images_dir,
-    indices_dir,
-    output_dir,
-    model_dir
-)
 
 
 parser = argparse.ArgumentParser(
@@ -44,9 +35,25 @@ SEED = 42
 def predict(area):
     areas = [area]
     version = "20200509"
+    data_dir = "../data/"
+    model_dir = "../models/"
+    output_dir = "../outputs/probmaps/"
     input_file = data_dir + "{}_dataset.csv".format(version)
 
-    # run_cmd(f"gsutil cp gs://immap-models/* {model_dir}")
+    images_dir = data_dir + "images/"
+    indices_dir = data_dir + "indices/"
+    pos_mask_dir = data_dir + "pos_masks/"
+    neg_mask_dir = data_dir + "neg_masks/"
+    tmp_dir = data_dir + "tmp/"
+
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)
+    if not os.path.exists(tmp_dir):
+        os.makedirs(tmp_dir)
+
+    run_cmd(f"gsutil cp gs://immap-models/* {model_dir}")
 
     model_names = ["LR_30k", "RF_30k"]
     models = []
@@ -124,13 +131,17 @@ def predict(area):
     ]
 
     for area in areas:
-        # # download images and indices
-        # run_cmd(
-        #     f"gsutil -q -m cp gs://immap-images/20220309/{area}_*.tif {images_dir}"
-        # )
-        # run_cmd(
-        #     f"gsutil -q -m cp gs://immap-indices/20220309/indices_{area}_*.tif {indices_dir}"
-        # )
+        # download images and indices
+        run_cmd(
+            f"gsutil -q -m cp gs://immap-images/20220309/{area}_*.tif {images_dir}"
+        )
+        run_cmd(
+            f"gsutil -q -m cp gs://immap-indices/20220309/indices_{area}_*.tif {indices_dir}"
+        )
+        cmd = """
+        for f in ../data/images/*_2020-2021.tif; do mv "$f" "$(echo "$f" | sed s/_2020-2021/_2019-2020/)"; done
+        """
+        run_cmd(cmd)
 
         # run prediction on 2 models
         area_dict = geoutils.get_filepaths([area], images_dir, indices_dir)
@@ -167,17 +178,17 @@ def predict(area):
             filename1, filename2, output_file, tmp_dir, grid_blocks=9
         )
 
-        # # upload result to output folder
-        # for model_name in ["ensembled", "LR_30k", "RF_30k"]:
-        #     out_dir = output_dir + model_name + "/"
-        #     files = glob(out_dir + f"*_{area}.tif")
-        #     for filename in files:
-        #         bucket = "gs://immap-output/{}/{}/".format(version, model_name)
-        #         run_cmd(f"gsutil cp {filename} {bucket}")
+        # upload result to output folder
+        for model_name in ["ensembled", "LR_30k", "RF_30k"]:
+            out_dir = output_dir + model_name + "/"
+            files = glob(out_dir + f"*_{area}.tif")
+            for filename in files:
+                bucket = "gs://immap-output/{}/{}/".format(version, model_name)
+                run_cmd(f"gsutil cp {filename} {bucket}")
 
-        # # delete images and indices
-        # run_cmd(f"rm {images_dir}/*.tif")
-        # run_cmd(f"rm {indices_dir}/indices_*.tif")
+        # delete images and indices
+        run_cmd(f"rm {images_dir}/*.tif")
+        run_cmd(f"rm {indices_dir}/indices_*.tif")
 
 
 if __name__ == "__main__":
