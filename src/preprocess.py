@@ -1,16 +1,16 @@
 import geopandas as gpd
 from fiona.crs import to_string
-import pathlib
 from tqdm import tqdm
 
 import sys
 import os
 
 sys.path.insert(0, "../utils")
+sys.path.insert(0, "utils")
 sys.path.insert(0, "../data")
-from gee import sen2median, deflatecrop1
-from gee_settings import BBOX, CLOUD_PARAMS, admin2RefN
-from geoutils import run_cmd
+from geoutils import deflatecrop1
+from gee_settings import admin2RefN, multipart
+from general_utils import run_cmd
 import argparse
 
 import os
@@ -28,8 +28,16 @@ import sys
 
 sys.path.insert(0, "../utils")
 import geoutils
+from env_settings import (
+    adm_dir,
+    tmp_dir,
+    raw_dir,
+    images_dir,
+    indices_dir,
+    pos_mask_dir,
+    neg_mask_dir,
+)
 
-import matplotlib.pyplot as plt
 
 
 parser = argparse.ArgumentParser(
@@ -55,95 +63,73 @@ parser.add_argument(
 )
 
 
-def preprocess(area, start, end):
-    areas = [area]
-    years = [f"{start}-{end}"]
-    multipart = ["arauca", "tibu", "bogota", "puertocarreno2"]
-    PRODUCT = "COPERNICUS/S2"  # L1C
+def preprocess(area, start, end, clear_local=False):
+    year = f"{start}-{end}"
 
-    data_dir = "../data/"
-
-    adm_dir = data_dir + "admin_bounds/"
-    img_dir = data_dir + "images/"
-    tmp_dir = data_dir + "tmp/"
-
-    data_dir = "../data/"
-    images_dir = data_dir + "images/"
-    indices_dir = data_dir + "indices/"
-    pos_mask_dir = data_dir + "pos_masks/"
-    neg_mask_dir = data_dir + "neg_masks/"
-
-    if not os.path.exists(data_dir):
-        os.makedirs(data_dir)
-    if not os.path.exists(images_dir):
-        os.makedirs(images_dir)
-    if not os.path.exists(indices_dir):
-        os.makedirs(indices_dir)
-    if not os.path.exists(pos_mask_dir):
-        os.makedirs(pos_mask_dir)
-    if not os.path.exists(neg_mask_dir):
-        os.makedirs(neg_mask_dir)
+    gdf = gpd.read_file(adm_dir + "admin_bounds.gpkg")
+    fcrs = to_string({"init": "epsg:4326", "no_defs": True})
+    gdf.crs = fcrs
 
     # create shapefiles for cropping
-    for area in areas:
-        area1 = gdf[gdf["admin2RefN"] == admin2RefN[area]]
-        area1.to_file(adm_dir + area + ".shp")
+    area1 = gdf[gdf["admin2RefN"] == admin2RefN[area]]
+    area1.to_file(adm_dir + area + ".shp")
 
     # collect filenames to be processed
     files_ = []
 
-    for area in areas:
-        for year in years:
-            if area in multipart:
-                # just get the largest part
-                files_.append(f"gee_{area}_{year}0000000000-0000000000")
-            else:
-                files_.append(f"gee_{area}_{year}")
+    if area in multipart:
+        # just get the largest part
+        files_.append(f"gee_{area}_{year}0000000000-0000000000")
+    else:
+        files_.append(f"gee_{area}_{year}")
 
     for f in tqdm(files_):
         deflatecrop1(
             raw_filename=f,
-            output_dir=img_dir,
+            raw_dir=raw_dir,
+            output_dir=images_dir,
             adm_dir=adm_dir,
             tmp_dir=tmp_dir,
-            bucket="gs://immap-images/20200613/",
-            clear_local=True,
+            bucket="gs://immap-images/test/",
+            clear_local=False,
         )
 
     ##### get filepaths
 
     area_dict = geoutils.get_filepaths(
-        areas, images_dir, indices_dir, pos_mask_dir, neg_mask_dir
+        [area], images_dir, indices_dir, pos_mask_dir, neg_mask_dir
     )
     assert area_dict[area]
 
     ### running per area
-    for area in areas:
+    # for area in areas:
+    if clear_local:
         run_cmd(
-            f"gsutil -q -m cp gs://immap-images/20220309/{area}*.tif {images_dir}"
+            f"gsutil -q -m cp gs://immap-images/test/{area}*.tif {images_dir}"
         )
 
-        # rename 2021-2021 to 2019-2020
-        cmd = """
-        for f in ../data/images/*_2021-2021.tif; do mv "$f" "$(echo "$f" | sed s/_2021-2021/_2019-2020/)"; done
-        """
-        run_cmd(cmd)
+    # rename {year} to 2019-2020
+    cmd = f"""
+    for f in data/images/*_{year}.tif; do mv "$f" "$(echo "$f" | sed s/_{year}/_2019-2020/)"; done
+    """
+    run_cmd(cmd, check = False)
 
-        area_dict = geoutils.get_filepaths(
-            [area], images_dir, indices_dir, pos_mask_dir, neg_mask_dir
-        )
-        print("Image filepaths:")
-        print(area_dict[list(area_dict.keys())[0]])
+    area_dict = geoutils.get_filepaths(
+        [area], images_dir, indices_dir, pos_mask_dir, neg_mask_dir
+    )
+    print("Image filepaths:")
+    print(area_dict[list(area_dict.keys())[0]])
 
-        area_dict = geoutils.write_indices(area_dict, area, indices_dir)
+    area_dict = geoutils.write_indices(area_dict, area, indices_dir, tmp_dir)
 
+    if clear_local:
         run_cmd(
-            f"gsutil cp {indices_dir}/indices_*.tif gs://immap-indices/20220309/"
+            f"gsutil cp {indices_dir}/indices_*.tif gs://immap-indices/test/"
         )
         run_cmd(f"rm {images_dir}/*.tif")
         run_cmd(f"rm {indices_dir}/indices_*.tif")
 
-        print(f"Done {area}")
+    print(f"Done {area}")
 
 
 if __name__ == "__main__":
