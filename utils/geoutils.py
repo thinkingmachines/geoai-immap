@@ -15,6 +15,13 @@ from rasterio import features
 import rasterio.mask
 from rasterio.plot import show
 from fiona.crs import to_string
+import subprocess
+from tqdm import tqdm
+import logging
+import os
+from pathlib import Path
+from datetime import datetime, timedelta
+from general_utils import run_cmd
 
 GRID_ID = 1
 
@@ -117,7 +124,7 @@ def write_indices(area_dict, area, indices_dir, tmp_dir):
                 dst.write(image_array["mbi"], 9)
                 dst.write(image_array["baei"], 10)
 
-        # collect to windows to 1 tif
+        # collect windows to 1 tif
         stitch(output_file, tmp_dir)
 
     return area_dict
@@ -287,9 +294,9 @@ def stitch(output_file, tmp_dir):
 
     text = f"""
 
-    # set conda env for these commands - took me 3h to figure out
+    # set conda env for these commands
     eval "$(conda shell.bash hook)"
-    conda activate /opt/conda/envs/ee
+    conda activate gdal_env
 
     gdal_merge.py -n -1 -a_nodata -1 -o merged.tif -of gtiff {files_string}
     gdalwarp -co "COMPRESS=DEFLATE" -srcnodata -dstnodata merged.tif {output_file}
@@ -300,19 +307,16 @@ def stitch(output_file, tmp_dir):
     f.write(text)
     f.close()
 
-    command = "sh " + tmp_dir + "stitch.sh"
-    run_cmd(command)
-
-
-def run_cmd(command):
-    try:
-        result = subprocess.run(
-            command, shell=True, check=True, capture_output=True
-        )
-        return result
-    except subprocess.CalledProcessError as exc:
-        print(exc.stderr.decode("utf-8"))  # readable gdal error
-        raise exc
+    logging.basicConfig(
+        filename=tmp_dir + "stitch.log", filemode="w", level=logging.DEBUG
+    )
+    result = subprocess.run(
+        "sh " + tmp_dir + "stitch.sh", shell=True, stdout=subprocess.PIPE
+    )
+    logging.info(result.stdout)
+    
+    # command = "sh " + tmp_dir + "stitch.sh"
+    # run_cmd(command)
 
 
 def read_inds_window(area_dict, area, window):
@@ -853,3 +857,118 @@ def get_neg_raster_mask(area_dict, plot=False):
         area_dict[area]["neg_mask_tiff"] = target_file
 
     return area_dict, target_dict
+
+
+
+# -----
+# deflatecrop
+# -----
+
+text1 = """
+
+# set conda env for these commands
+eval "$(conda shell.bash hook)"
+conda activate gdal_env
+
+#gsutil cp gs://immap-gee/gee_area_year.tif raw_dir
+
+gdal_translate -co COMPRESS=DEFLATE -co TILED=YES raw_dirgee_area_year.tif output_dirDEFLATED_gee_area_year.tif
+
+gdalwarp -co "COMPRESS=DEFLATE" -cutline adm_dirarea.shp -srcnodata -dstnodata output_dirDEFLATED_gee_area_year.tif output_diroutput.tif
+
+#gsutil cp output_diroutput.tif bucketoutput.tif
+
+#rm raw_dirgee_area_year.tif
+#rm output_dirDEFLATED_gee_area_year.tif
+#rm output_diroutput.tif
+
+"""
+
+# decoupled cropping and deflating
+# makes arauca work - if applied to other areas, cuts out a part of the image in the final output
+text2 = """
+
+# set conda env for these commands
+eval "$(conda shell.bash hook)"
+conda activate gdal_env
+
+#gsutil cp gs://immap-gee/gee_area_year.tif raw_dir
+
+gdal_translate -co COMPRESS=DEFLATE -co TILED=YES raw_dirgee_area_year.tif output_dirDEFLATED_gee_area_year.tif
+
+gdalwarp -cutline adm_dirarea.shp -srcnodata -dstnodata output_dirDEFLATED_gee_area_year.tif output_dirCROPPED_gee_area_year.tif
+
+gdal_translate -co COMPRESS=DEFLATE -co TILED=YES output_dirCROPPED_gee_area_year.tif output_diroutput.tif
+
+#gsutil cp output_diroutput.tif bucketoutput.tif
+
+#rm raw_dirgee_area_year.tif
+#rm output_dirDEFLATED_gee_area_year.tif
+#rm output_dirCROPPED_gee_area_year.tif
+#rm output_diroutput.tif
+
+"""
+
+
+def deflatecrop1(
+    raw_filename, raw_dir, output_dir, adm_dir, tmp_dir, bucket, clear_local=True
+):
+    """
+    Same as deflatecrop_all but focused on one image at a time
+
+    Args
+        output (str): what filename should look like, modified based on if raw_filename is a list
+    """
+    if os.path.exists(tmp_dir + "deflatecrop.sh"):
+        os.remove(tmp_dir + "deflatecrop.sh")
+
+    logging.basicConfig(
+        filename=tmp_dir + "deflatecrop.log", filemode="w", level=logging.DEBUG
+    )
+    logging.info(
+        (datetime.now() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+    )
+    logging.info("Running for {}".format(raw_filename))
+
+    split_ = (
+        raw_filename.replace("0000000000-0000000000", "")
+        .replace("0000000000-0000009472", "")
+        .split("_")
+    )
+    output = split_[1] + "_" + split_[2] + ".tif"
+    area = raw_filename.split("_")[1]
+
+    # special processing for arauca
+    if area == "arauca":
+        text = text2
+    else:
+        text = text1
+
+    replacement_txt = (
+        text.replace("gee_area_year", raw_filename)
+        .replace("area.shp", area + ".shp")
+        .replace("raw_dir", str(Path(raw_dir).resolve()) + "/")
+        .replace("output_dir", str(Path(output_dir).resolve()) + "/")
+        .replace("adm_dir", str(Path(adm_dir).resolve()) + "/")
+        .replace("output.tif", output)
+        .replace("bucket", bucket)
+    )
+    if clear_local:
+        replacement_txt = replacement_txt.replace("#rm", "rm")
+
+    f = open(tmp_dir + "deflatecrop.sh", "w")
+    f.write(replacement_txt)
+    f.close()
+    logging.info(
+        "Saving the following shell script in " + tmp_dir + "deflatecrop.sh"
+    )
+    logging.info(replacement_txt)
+
+    assert os.path.exists(adm_dir + area + ".shp")
+    logging.info("Running shell script")
+    result = subprocess.run(
+        "sh " + tmp_dir + "deflatecrop.sh", shell=True, stdout=subprocess.PIPE
+    )
+    logging.info(result.stdout)
+    logging.info("Saved to {}".format(bucket + output))
+    logging.info("Done!")
