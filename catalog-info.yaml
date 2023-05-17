@@ -20,6 +20,6 @@ metadata:
   tags:
     - geospatial
 spec:
-  type: internal
+  type: public
   lifecycle: maintainance
   owner: user:rnvllflores
