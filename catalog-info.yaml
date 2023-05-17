@@ -1,0 +1,25 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: geoai-immap
+  title: iMMAP Settlement Detection
+  description: This repository accompanies our research work for Informal Settlement Detection in Northern Colombia. The goal of this project is to provide a means for faster, cheaper, and more scalable detection of rapidly growing informal settlements using low-resolution satellite images and machine learning.
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+    github.com/project-slug: thinkingmachines/geoai-immap
+  links:
+    - url: https://thinkdatasci.slack.com/archives/CS6RW3X1Q
+      title: Slack - Main Channel
+      icon: chat
+    - url: http://bit.ly/immap-gdrive-2022
+      title: Documents
+      icon: docs
+    - url: https://arxiv.org/pdf/2008.13583.pdf
+      title: Research Publication
+      icon: docs
+  tags:
+    - geospatial
+spec:
+  type: internal
+  lifecycle: production
+  owner: user:rnvllflores
