@@ -58,7 +58,7 @@ This repository is divided into three main parts:
 We evaluated model performance across different negative sampling parameters, and that is reflected on 10K, 30K, 50K, in the 3 instances of 03_Model_Optimization.ipynb
 
 ## Data
-For privacy concerns, we did not include in this repo the labelled training data that identified informal settlements in Colombia. If you need this dataset, please contact ThinkingMachines or IMMAP at hello@thinkingmachin.es, info@immap.org.
+For privacy concerns, we did not include in this repo the labelled training data that identified informal settlements in Colombia. If you need this dataset, please contact [iMMAP Colombia](https://immap.org/colombia/) or [3iSolution Colombia](https://3is.org/colombia/) at info@immap.org, info@3is.org.
 
 To use your own data, please:
 1. Save informal settlement polygon as GeoPackage "area_mask.gpkg"
